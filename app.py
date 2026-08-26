@@ -1,7 +1,9 @@
+from datetime import datetime
+import io
 import re
 import urllib.parse
-from datetime import datetime
 from google import genai
+from google.genai import types
 from google.oauth2.service_account import Credentials
 import gspread
 import pandas as pd
@@ -10,7 +12,7 @@ from pydantic import BaseModel
 import streamlit as st
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLES CSS (DA MYRIADE GAMES)
+# 1. CONFIGURATION DE LA PAGE & STYLES CSS
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Myriade Games — TCG Scanner", page_icon="🔮", layout="wide"
@@ -148,9 +150,10 @@ st.markdown(
 # ---------------------------------------------------------
 # 2. CONFIGURATION DES API ET ACCÈS
 # ---------------------------------------------------------
-client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+api_key = st.secrets["GEMINI_API_KEY"].strip()
+client = genai.Client(api_key=api_key)
 
-SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
+SPREADSHEET_ID = "TON_ID_GOOGLE_SHEETS_ICI"
 
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
@@ -161,7 +164,7 @@ sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 
 # ---------------------------------------------------------
-# 3. SCHÉMA DE DONNÉES & FONCTIONS UTILES
+# 3. SCHÉMA DE DONNÉES & FONCTIONS
 # ---------------------------------------------------------
 class UniversalCard(BaseModel):
   game_name: str
@@ -190,7 +193,6 @@ def render_kpi(label: str, value: str, icon: str = ""):
 
 def build_cardmarket_url(slug: str, search_term: str) -> str:
   clean_slug = slug.strip().split("/")[0]
-  # Nettoyage des slashes, tirets et caractères spéciaux
   clean_term = re.sub(r"[\-\/,\.:#]", " ", search_term)
   clean_term = " ".join(clean_term.split())
   search_query = urllib.parse.quote(clean_term)
@@ -218,8 +220,16 @@ with tab1:
     image_input = st.camera_input("Prendre une photo de la carte")
 
   if image_input:
-    with st.spinner("Analyse visuelle en cours par Gemini 3.6..."):
+    with st.spinner("Analyse visuelle en cours par l'IA..."):
+      # Conversion de l'image PIL en octets JPEG
       pil_image = Image.open(image_input).convert("RGB")
+      img_byte_arr = io.BytesIO()
+      pil_image.save(img_byte_arr, format="JPEG")
+      image_bytes = img_byte_arr.getvalue()
+
+      image_part = types.Part.from_bytes(
+          data=image_bytes, mime_type="image/jpeg"
+      )
 
       prompt = """
       Identifie cette carte TCG.
@@ -231,56 +241,66 @@ with tab1:
         Exemple 3 : Carte "Charizard ex", Extension "151", Numéro "199/165" -> "Charizard ex 151"
       """
 
-      response = client.models.generate_content(
-          model="gemini-2.5-flash",
-          contents=[pil_image, prompt],
-          config={
-              "response_mime_type": "application/json",
-              "response_schema": UniversalCard,
-          },
-      )
-      card = response.parsed
+      try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[image_part, prompt],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=UniversalCard,
+            ),
+        )
+        card = response.parsed
 
-    st.markdown("---")
-    st.subheader(f"🔮 {card.card_name}")
+        st.markdown("---")
+        st.subheader(f"🔮 {card.card_name}")
 
-    col1, col2 = st.columns(2)
-    with col1:
-      st.markdown(f"**Jeu :** `{card.game_name}`")
-      st.markdown(f"**Extension :** {card.set_name}")
-    with col2:
-      st.markdown(f"**Numéro :** {card.card_number}")
+        col1, col2 = st.columns(2)
+        with col1:
+          st.markdown(f"**Jeu :** `{card.game_name}`")
+          st.markdown(f"**Extension :** {card.set_name}")
+        with col2:
+          st.markdown(f"**Numéro :** {card.card_number}")
 
-    cardmarket_url = build_cardmarket_url(
-        card.cardmarket_slug, card.cardmarket_search_term
-    )
+        cardmarket_url = build_cardmarket_url(
+            card.cardmarket_slug, card.cardmarket_search_term
+        )
 
-    st.markdown(
-        f'<p style="margin-top: 10px;"><a href="{cardmarket_url}"'
-        ' target="_blank">↗ Consulter la cote en direct sur'
-        " Cardmarket</a></p>",
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            f'<p style="margin-top: 10px;"><a href="{cardmarket_url}"'
+            ' target="_blank">↗ Consulter la cote en direct sur'
+            " Cardmarket</a></p>",
+            unsafe_allow_html=True,
+        )
 
-    with st.form("add_to_stock_form"):
-      quantite = st.number_input(
-          "Quantité à ajouter au stock", min_value=1, value=1, step=1
-      )
-      submit_button = st.form_submit_button("⚡ Enregistrer dans l'inventaire")
+        with st.form("add_to_stock_form"):
+          quantite = st.number_input(
+              "Quantité à ajouter au stock", min_value=1, value=1, step=1
+          )
+          submit_button = st.form_submit_button(
+              "⚡ Enregistrer dans l'inventaire"
+          )
 
-      if submit_button:
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        sheet.append_row([
-            date_str,
-            card.game_name,
-            card.card_name,
-            card.set_name,
-            card.card_number,
-            quantite,
-            cardmarket_url,
-        ])
-        st.success(
-            f"✅ {quantite}x {card.card_name} ajouté(s) à la base de données !"
+          if submit_button:
+            date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            sheet.append_row([
+                date_str,
+                card.game_name,
+                card.card_name,
+                card.set_name,
+                card.card_number,
+                quantite,
+                cardmarket_url,
+            ])
+            st.success(
+                f"✅ {quantite}x {card.card_name} ajouté(s) à la base de"
+                " données !"
+            )
+
+      except Exception as e:
+        st.error(
+            "❌ Erreur lors de l'appel à l'API Google : Vérifie que la clé n'est"
+            f" pas restreinte dans Google Cloud.\nDétail de l'erreur : {e}"
         )
 
 # --- ONGLET 2 : INVENTAIRE ---
@@ -294,7 +314,6 @@ with tab2:
           pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
       )
 
-      # --- KPI CARDS SUR-MESURE ---
       col_m1, col_m2, col_m3 = st.columns(3)
 
       with col_m1:
@@ -321,7 +340,6 @@ with tab2:
 
       st.markdown("<br>", unsafe_allow_html=True)
 
-      # --- BARRE DE RECHERCHE ET FILTRES ---
       col_search, col_filter = st.columns([2, 1])
       with col_search:
         search_term = st.text_input(
@@ -332,7 +350,6 @@ with tab2:
         jeux_dispos = ["Tous les jeux"] + sorted(df["Jeu"].unique().tolist())
         selected_game = st.selectbox("🎮 Filtrer par jeu", jeux_dispos)
 
-      # Filtrage
       filtered_df = df.copy()
       if selected_game != "Tous les jeux":
         filtered_df = filtered_df[filtered_df["Jeu"] == selected_game]
@@ -346,7 +363,6 @@ with tab2:
 
       st.markdown(f"**Cartes affichées ({len(filtered_df)})**")
 
-      # --- CARTES D'INVENTAIRE INTERACTIVES ---
       for idx, row in filtered_df.iterrows():
         with st.container():
           c_info, c_qty, c_actions, c_link = st.columns([4, 1.5, 2.5, 1.5])
