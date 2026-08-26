@@ -9,7 +9,7 @@ from pydantic import BaseModel
 import streamlit as st
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLES CSS (DA MYRIADE GAMES)
+# 1. CONFIGURATION DE LA PAGE & STYLES CSS
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Myriade Games — TCG Scanner", page_icon="🔮", layout="wide"
@@ -48,7 +48,6 @@ st.markdown(
         margin-bottom: 2rem;
     }
 
-    /* Conteneurs & cartes Glassmorphic */
     div[data-testid="stForm"], div[data-testid="stMetric"], .stDataFrame, div[data-testid="stExpander"] {
         background: rgba(15, 23, 42, 0.65) !important;
         border: 1px solid rgba(0, 240, 255, 0.2) !important;
@@ -57,7 +56,6 @@ st.markdown(
         backdrop-filter: blur(10px);
     }
 
-    /* Onglets */
     button[data-baseweb="tab"] {
         background-color: transparent !important;
         color: #94a3b8 !important;
@@ -74,7 +72,6 @@ st.markdown(
         box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
     }
 
-    /* Boutons Néo-brutalistes */
     .stButton > button, div[data-testid="stForm"] button {
         background: linear-gradient(90deg, #7c3aed 0%, #0284c7 100%) !important;
         color: #ffffff !important;
@@ -134,7 +131,7 @@ sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 
 # ---------------------------------------------------------
-# 3. SCHÉMA DE DONNÉES (PYDANTIC)
+# 3. SCHÉMA DE DONNÉES
 # ---------------------------------------------------------
 class UniversalCard(BaseModel):
   game_name: str
@@ -235,10 +232,11 @@ with tab2:
     if records:
       df = pd.DataFrame(records)
 
-      # Normalisation du type de la colonne Quantité
-      df["Quantité"] = pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
+      df["Quantité"] = (
+          pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
+      )
 
-      # Top Metrics
+      # Metrics
       col_m1, col_m2, col_m3 = st.columns(3)
       col_m1.metric("Références uniques", len(df))
       col_m2.metric("Total exemplaires", int(df["Quantité"].sum()))
@@ -251,7 +249,6 @@ with tab2:
           "⚡ **Ajustement Rapide (Ajouter / Retirer / Supprimer)**",
           expanded=True,
       ):
-        # Création de la liste des cartes pour la sélection
         df["label_select"] = (
             df["Jeu"]
             + " — "
@@ -296,7 +293,6 @@ with tab2:
               )
               st.toast(f"-1 {card_title} (Nouveau stock : {current_qty - 1})")
             else:
-              # Suppression automatique si stock passe à 0
               df = df.drop(selected_idx)
               df_to_save = df.drop(columns=["label_select"])
               sheet.clear()
@@ -323,27 +319,30 @@ with tab2:
           if col_b4.button("🔄 Rafraîchir"):
             st.rerun()
 
-      # Drop de la colonne temporaire
       df = df.drop(columns=["label_select"])
 
       # --- SECTION 2 : ÉDITEUR EN GRILLE DE MASSE ---
       st.markdown("### ✏️ Éditeur de masse (Format Tableur)")
       st.caption(
-          "Modifie directement les cases dans le tableau ci-dessous, puis"
-          " clique sur **Sauvegarder**."
+          "Modifie directement la colonne **Quantité** ci-dessous, puis clique"
+          " sur **Sauvegarder**."
       )
 
       edited_df = st.data_editor(
           df,
           use_container_width=True,
           num_rows="dynamic",
+          disabled=[
+              "Date",
+              "Jeu",
+              "Nom",
+              "Extension",
+              "Numéro",
+              "Lien Cardmarket",
+          ],
           column_config={
-              "Lien Cardmarket": st.column_config.LinkColumn(
-                  "Fiche Prix", read_only=True
-              ),
-              "Date": st.column_config.TextColumn(
-                  "Date d'ajout", read_only=True
-              ),
+              "Lien Cardmarket": st.column_config.LinkColumn("Fiche Prix"),
+              "Date": st.column_config.TextColumn("Date d'ajout"),
               "Quantité": st.column_config.NumberColumn(
                   "Quantité", min_value=0, step=1, required=True
               ),
@@ -352,7 +351,6 @@ with tab2:
       )
 
       if st.button("💾 Sauvegarder les modifications de la grille"):
-        # Élimination des lignes avec une quantité de 0 ou vide
         edited_df["Quantité"] = pd.to_numeric(
             edited_df["Quantité"], errors="coerce"
         ).fillna(0)
@@ -367,7 +365,9 @@ with tab2:
         st.rerun()
 
     else:
-      st.info("L'inventaire est actuellement vide. Scanne une carte pour commencer !")
+      st.info(
+          "L'inventaire est actuellement vide. Scanne une carte pour commencer !"
+      )
 
   except Exception as e:
     st.error(f"Erreur d'accès à la base de données : {e}")
