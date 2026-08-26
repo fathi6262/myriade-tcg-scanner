@@ -13,7 +13,7 @@ from PIL import Image
 import streamlit as st
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLES CSS (DA MYRIADE GAMES)
+# 1. CONFIGURATION DE LA PAGE & STYLES CSS
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Myriade Games — TCG Master Stock", page_icon="🔮", layout="wide"
@@ -149,22 +149,32 @@ st.markdown(
 )
 
 # ---------------------------------------------------------
-# 2. CONFIGURATION DES API (GROQ + GOOGLE SHEETS)
+# 2. CONFIGURATION ET CACHE DES API
 # ---------------------------------------------------------
-groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"].strip())
-
 SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 
-scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-creds = Credentials.from_service_account_info(
-    st.secrets["gcp_service_account"], scopes=scopes
-)
-gc = gspread.authorize(creds)
-sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
+
+@st.cache_resource
+def get_groq_client():
+  return Groq(api_key=st.secrets["GROQ_API_KEY"].strip())
+
+
+@st.cache_resource
+def get_google_sheet():
+  scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+  creds = Credentials.from_service_account_info(
+      st.secrets["gcp_service_account"], scopes=scopes
+  )
+  gc = gspread.authorize(creds)
+  return gc.open_by_key(SPREADSHEET_ID).sheet1
+
+
+groq_client = get_groq_client()
+sheet = get_google_sheet()
 
 
 # ---------------------------------------------------------
-# 3. FONCTIONS UTILITAIRES
+# 3. FONCTIONS UTILITAIRES & CACHE IA
 # ---------------------------------------------------------
 def update_sheet_data(dataframe):
   sheet.clear()
@@ -190,7 +200,8 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
-def analyze_card_image_groq(image_bytes):
+@st.cache_data(show_spinner=False)
+def analyze_card_image_groq_cached(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
@@ -237,11 +248,8 @@ def analyze_card_image_groq(image_bytes):
   )
 
   raw_text = chat_completion.choices[0].message.content
-
-  # Nettoyage des balises de réflexion
   clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
 
-  # Extraction du JSON
   json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
   if json_match:
     return json.loads(json_match.group())
@@ -281,83 +289,80 @@ with tab1:
       image_input = st.camera_input("Prendre la carte en photo")
 
     if image_input:
-      with st.spinner("Analyse visuelle en cours par Groq (Qwen Vision)..."):
-        pil_image = Image.open(image_input).convert("RGB")
-        img_byte_arr = io.BytesIO()
-        pil_image.save(img_byte_arr, format="JPEG")
+      pil_image = Image.open(image_input).convert("RGB")
+      img_byte_arr = io.BytesIO()
+      pil_image.save(img_byte_arr, format="JPEG")
+      image_bytes = img_byte_arr.getvalue()
 
-        try:
-          card = analyze_card_image_groq(img_byte_arr.getvalue())
+      try:
+        with st.spinner("Analyse visuelle en cours par Groq..."):
+          card = analyze_card_image_groq_cached(image_bytes)
 
-          st.markdown("---")
-          st.subheader(f"🔮 {card.get('card_name', 'Carte inconnue')}")
+        st.markdown("---")
+        st.subheader(f"🔮 {card.get('card_name', 'Carte inconnue')}")
 
-          col1, col2, col3 = st.columns(3)
-          with col1:
-            st.markdown(f"**Jeu :** `{card.get('game_name', 'N/A')}`")
-            st.markdown(f"**Extension :** {card.get('set_name', 'N/A')}")
-          with col2:
-            st.markdown(f"**Numéro :** {card.get('card_number', 'N/A')}")
-            st.markdown(f"**Langue :** {card.get('language', 'FR')}")
-          with col3:
-            st.markdown(f"**Finition :** {card.get('is_foil', 'Normal')}")
-            price = float(card.get("estimated_price_eur", 0.0))
-            st.markdown(f"**Cote est. :** ~{price:.2f} €")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+          st.markdown(f"**Jeu :** `{card.get('game_name', 'N/A')}`")
+          st.markdown(f"**Extension :** {card.get('set_name', 'N/A')}")
+        with col2:
+          st.markdown(f"**Numéro :** {card.get('card_number', 'N/A')}")
+          st.markdown(f"**Langue :** {card.get('language', 'FR')}")
+        with col3:
+          st.markdown(f"**Finition :** {card.get('is_foil', 'Normal')}")
+          price = float(card.get("estimated_price_eur", 0.0))
+          st.markdown(f"**Cote est. :** ~{price:.2f} €")
 
-          cardmarket_url = build_cardmarket_url(
-              card.get("cardmarket_slug", "Pokemon"),
-              card.get("cardmarket_search_term", card.get("card_name", "")),
-          )
-          st.markdown(
-              f'<p style="margin-top: 5px;"><a href="{cardmarket_url}"'
-              ' target="_blank">↗ Voir la cote Cardmarket</a></p>',
-              unsafe_allow_html=True,
-          )
+        cardmarket_url = build_cardmarket_url(
+            card.get("cardmarket_slug", "Pokemon"),
+            card.get("cardmarket_search_term", card.get("card_name", "")),
+        )
+        st.markdown(
+            f'<p style="margin-top: 5px;"><a href="{cardmarket_url}"'
+            ' target="_blank">↗ Voir la cote Cardmarket</a></p>',
+            unsafe_allow_html=True,
+        )
 
-          with st.form("single_add_form"):
-            c_qty, c_cond, c_loc = st.columns(3)
-            with c_qty:
-              quantite = st.number_input(
-                  "Quantité", min_value=1, value=1, step=1
-              )
-            with c_cond:
-              condition = st.selectbox(
-                  "État",
-                  [
-                      "Near Mint (NM)",
-                      "Excellent (EX)",
-                      "Good (GD)",
-                      "Light Played (LP)",
-                      "Played (PL)",
-                  ],
-              )
-            with c_loc:
-              emplacement = st.text_input(
-                  "Emplacement physique", value="Classeur 1"
-              )
+        with st.form("single_add_form"):
+          c_qty, c_cond, c_loc = st.columns(3)
+          with c_qty:
+            quantite = st.number_input("Quantité", min_value=1, value=1, step=1)
+          with c_cond:
+            condition = st.selectbox(
+                "État",
+                [
+                    "Near Mint (NM)",
+                    "Excellent (EX)",
+                    "Good (GD)",
+                    "Light Played (LP)",
+                    "Played (PL)",
+                ],
+            )
+          with c_loc:
+            emplacement = st.text_input(
+                "Emplacement physique", value="Classeur 1"
+            )
 
-            if st.form_submit_button("⚡ Ajouter au stock"):
-              date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-              sheet.append_row([
-                  date_str,
-                  card.get("game_name", ""),
-                  card.get("card_name", ""),
-                  card.get("set_name", ""),
-                  card.get("card_number", ""),
-                  card.get("is_foil", "Normal"),
-                  card.get("language", "FR"),
-                  condition,
-                  emplacement,
-                  quantite,
-                  price,
-                  cardmarket_url,
-              ])
-              st.success(
-                  f"✅ {card.get('card_name')} enregistré avec succès !"
-              )
+          if st.form_submit_button("⚡ Ajouter au stock"):
+            date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            sheet.append_row([
+                date_str,
+                card.get("game_name", ""),
+                card.get("card_name", ""),
+                card.get("set_name", ""),
+                card.get("card_number", ""),
+                card.get("is_foil", "Normal"),
+                card.get("language", "FR"),
+                condition,
+                emplacement,
+                quantite,
+                price,
+                cardmarket_url,
+            ])
+            st.success(f"✅ {card.get('card_name')} enregistré avec succès !")
 
-        except Exception as e:
-          st.error(f"⚠️ Erreur d'analyse : {e}")
+      except Exception as e:
+        st.error(f"⚠️ Erreur d'analyse : {e}")
 
   else:
     uploaded_files = st.file_uploader(
@@ -393,7 +398,9 @@ with tab1:
           pil_img.save(img_byte_arr, format="JPEG")
 
           try:
-            parsed_card = analyze_card_image_groq(img_byte_arr.getvalue())
+            parsed_card = analyze_card_image_groq_cached(
+                img_byte_arr.getvalue()
+            )
             analyzed_cards.append(parsed_card)
           except Exception as e:
             st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
@@ -428,22 +435,23 @@ with tab1:
 
       if st.button("💾 Tout valider dans Google Sheets"):
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        for item in batch_data:
-          sheet.append_row([
-              date_str,
-              item["Jeu"],
-              item["Nom"],
-              item["Extension"],
-              item["Numéro"],
-              item["Finition"],
-              item["Langue"],
-              batch_cond,
-              batch_loc,
-              1,
-              item["Prix Est. (€)"],
-              item["URL"],
-          ])
-        st.success("✅ Lot ajouté au stock !")
+        rows_to_add = [[
+            date_str,
+            item["Jeu"],
+            item["Nom"],
+            item["Extension"],
+            item["Numéro"],
+            item["Finition"],
+            item["Langue"],
+            batch_cond,
+            batch_loc,
+            1,
+            item["Prix Est. (€)"],
+            item["URL"],
+        ] for item in batch_data]
+
+        sheet.append_rows(rows_to_add)
+        st.success("✅ Lot ajouté au stock en une fraction de seconde !")
         del st.session_state["batch_results"]
         st.rerun()
 
