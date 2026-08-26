@@ -194,19 +194,21 @@ def analyze_card_image_groq(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
-    Identifie cette carte TCG et réponds uniquement avec un objet JSON structuré comme suit :
+    Identifie cette carte TCG et réponds DIRECTEMENT avec l'objet JSON. 
+    NE METS AUCUNE BALISE <think> ET NE FAIS AUCUNE EXPLICATION. Commences directement par le caractère {
+
+    Structure attendue :
     {
-      "game_name": "Pokemon",
-      "card_name": "Dracaufeu ex",
-      "set_name": "151",
-      "card_number": "199/165",
-      "cardmarket_slug": "Pokemon",
-      "cardmarket_search_term": "Dracaufeu ex 151",
+      "game_name": "Nom du jeu",
+      "card_name": "Nom de la carte",
+      "set_name": "Nom extension",
+      "card_number": "Numéro carte",
+      "cardmarket_slug": "Nom du jeu",
+      "cardmarket_search_term": "Nom carte et extension",
       "language": "FR",
-      "is_foil": "Holo/Foil",
+      "is_foil": "Normal",
       "estimated_price_eur": 2.50
     }
-    Attention : Donne uniquement le bloc JSON complet, sans aucun texte d'explication.
     """
 
   chat_completion = groq_client.chat.completions.create(
@@ -228,7 +230,12 @@ def analyze_card_image_groq(image_bytes):
   )
 
   raw_text = chat_completion.choices[0].message.content
-  json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+
+  # Nettoyage des balises de pensée <think>...</think>
+  clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
+
+  # Extraction du JSON
+  json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
   if json_match:
     return json.loads(json_match.group())
   else:
