@@ -1,9 +1,12 @@
 from datetime import datetime
 import io
 import re
+import time
 import urllib.parse
+
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 from google.oauth2.service_account import Credentials
 import gspread
 import pandas as pd
@@ -12,7 +15,7 @@ from pydantic import BaseModel
 import streamlit as st
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLES CSS
+# 1. CONFIGURATION DE LA PAGE & STYLES CSS (MYRIADE GAMES)
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Myriade Games — TCG Scanner", page_icon="🔮", layout="wide"
@@ -164,7 +167,7 @@ sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 
 # ---------------------------------------------------------
-# 3. SCHÉMA DE DONNÉES & FONCTIONS
+# 3. SCHÉMA DE DONNÉES & FONCTIONS UTILES
 # ---------------------------------------------------------
 class UniversalCard(BaseModel):
   game_name: str
@@ -199,6 +202,44 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
+def analyze_card_image_with_retry(image_bytes):
+  image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+
+  prompt = """
+    Identifie cette carte TCG.
+    - Dans 'cardmarket_slug', donne STRICTEMENT la catégorie principale Cardmarket en UN SEUL MOT (ex: Pokemon, Magic, YuGiOh, Lorcana, OnePiece, DragonBallSuper, Riftbound). NE METS JAMAIS de sous-dossier ou de slash.
+    - Dans 'cardmarket_search_term', COMBINE le NOM DE LA CARTE et le NOM DE L'EXTENSION (ou code d'extension).
+      RÈGLES STRICTES : RETIRE TOUS les slashes (/), les tirets (-) et les numéros de collection sous forme de fraction.
+      Exemple 1 : Carte "Dracaufeu", Extension "Set de Base", Numéro "4/102" -> "Dracaufeu Set de Base"
+      Exemple 2 : Carte "Ahri - Inquisitive", Extension "Riftbound" -> "Ahri Inquisitive Riftbound"
+      Exemple 3 : Carte "Charizard ex", Extension "151", Numéro "199/165" -> "Charizard ex 151"
+    """
+
+  max_retries = 3
+  for attempt in range(max_retries):
+    try:
+      response = client.models.generate_content(
+          model="gemini-3.6-flash",
+          contents=[image_part, prompt],
+          config=types.GenerateContentConfig(
+              response_mime_type="application/json",
+              response_schema=UniversalCard,
+          ),
+      )
+      return response.parsed
+    except APIError as e:
+      if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+        if attempt < max_retries - 1:
+          st.toast(
+              f"⏳ Quota dépassé. Nouvelle tentative dans 15s... ({attempt + 1}/{max_retries})"
+          )
+          time.sleep(15)
+        else:
+          raise e
+      else:
+        raise e
+
+
 # ---------------------------------------------------------
 # 4. APPLICATION STREAMLIT
 # ---------------------------------------------------------
@@ -226,30 +267,8 @@ with tab1:
       pil_image.save(img_byte_arr, format="JPEG")
       image_bytes = img_byte_arr.getvalue()
 
-      image_part = types.Part.from_bytes(
-          data=image_bytes, mime_type="image/jpeg"
-      )
-
-      prompt = """
-      Identifie cette carte TCG.
-      - Dans 'cardmarket_slug', donne STRICTEMENT la catégorie principale Cardmarket en UN SEUL MOT (ex: Pokemon, Magic, YuGiOh, Lorcana, OnePiece, DragonBallSuper, Riftbound). NE METS JAMAIS de sous-dossier ou de slash.
-      - Dans 'cardmarket_search_term', COMBINE le NOM DE LA CARTE et le NOM DE L'EXTENSION (ou code d'extension).
-        RÈGLES STRICTES : RETIRE TOUS les slashes (/), les tirets (-) et les numéros de collection sous forme de fraction.
-        Exemple 1 : Carte "Dracaufeu", Extension "Set de Base", Numéro "4/102" -> "Dracaufeu Set de Base"
-        Exemple 2 : Carte "Ahri - Inquisitive", Extension "Riftbound" -> "Ahri Inquisitive Riftbound"
-        Exemple 3 : Carte "Charizard ex", Extension "151", Numéro "199/165" -> "Charizard ex 151"
-      """
-
       try:
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=[image_part, prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=UniversalCard,
-            ),
-        )
-        card = response.parsed
+        card = analyze_card_image_with_retry(image_bytes)
 
         st.markdown("---")
         st.subheader(f"🔮 {card.card_name}")
@@ -297,7 +316,11 @@ with tab1:
             )
 
       except Exception as e:
-        st.error(f"❌ Erreur lors de l'appel API Gemini 3.6 : {e}")
+        st.error(
+            "⚠️ **Quota quotidien temporairement atteint pour Gemini 3.6 (20"
+            " requêtes/jour en mode gratuit).**\n\nActive la facturation sur"
+            " Google AI Studio pour lever cette limite ou réessaie plus tard."
+        )
 
 # --- ONGLET 2 : INVENTAIRE ---
 with tab2:
