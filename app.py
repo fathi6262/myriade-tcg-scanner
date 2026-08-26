@@ -194,18 +194,19 @@ def analyze_card_image_groq(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
-    Identifie cette carte TCG et réponds EXCLUSIVEMENT au format JSON strict respectant cette structure exacte :
+    Identifie cette carte TCG et réponds UNIQUEMENT sous la forme d'un objet JSON strict avec la structure suivante :
     {
-      "game_name": "Nom du jeu (ex: Pokemon, Magic, Lorcana, Yu-Gi-Oh!)",
-      "card_name": "Nom exact de la carte",
-      "set_name": "Nom de l'extension",
-      "card_number": "Numéro de la carte (ex: 199/165)",
-      "cardmarket_slug": "Catégorie principale Cardmarket en un seul mot (ex: Pokemon, Magic, YuGiOh, Lorcana)",
-      "cardmarket_search_term": "Nom de la carte et extension combinés sans slashes ni tirets",
-      "language": "Code langue (FR, EN, JP, DE)",
-      "is_foil": "Holo/Foil, Reverse ou Normal",
+      "game_name": "Pokemon",
+      "card_name": "Dracaufeu ex",
+      "set_name": "151",
+      "card_number": "199/165",
+      "cardmarket_slug": "Pokemon",
+      "cardmarket_search_term": "Dracaufeu ex 151",
+      "language": "FR",
+      "is_foil": "Holo/Foil",
       "estimated_price_eur": 2.50
     }
+    Règles : Pas de texte d'explication, uniquement le JSON. Remplis les vraies valeurs lues sur l'image.
     """
 
   chat_completion = groq_client.chat.completions.create(
@@ -223,6 +224,8 @@ def analyze_card_image_groq(image_bytes):
       }],
       model="qwen/qwen3.6-27b",
       response_format={"type": "json_object"},
+      max_tokens=1000,
+      temperature=0.2,
   )
 
   return json.loads(chat_completion.choices[0].message.content)
