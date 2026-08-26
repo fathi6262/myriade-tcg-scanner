@@ -221,7 +221,7 @@ def analyze_card_image_with_retry(image_bytes):
   for attempt in range(max_retries):
     try:
       response = client.models.generate_content(
-          model="gemini-3.6-flash",
+          model="gemini-1.5-flash",
           contents=[image_part, prompt],
           config=types.GenerateContentConfig(
               response_mime_type="application/json",
