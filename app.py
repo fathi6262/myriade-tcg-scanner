@@ -153,7 +153,7 @@ st.markdown(
 api_key = st.secrets["GEMINI_API_KEY"].strip()
 client = genai.Client(api_key=api_key)
 
-SPREADSHEET_ID = "TON_ID_GOOGLE_SHEETS_ICI"
+SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
