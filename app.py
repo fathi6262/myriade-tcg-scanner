@@ -49,7 +49,6 @@ st.markdown(
         margin-bottom: 1.5rem;
     }
 
-    /* Formulaires et Conteneurs */
     div[data-testid="stForm"], .stDataFrame {
         background: rgba(15, 23, 42, 0.65) !important;
         border: 1px solid rgba(0, 240, 255, 0.2) !important;
@@ -58,7 +57,6 @@ st.markdown(
         backdrop-filter: blur(10px);
     }
 
-    /* Cartes KPI personnalisées */
     .kpi-card {
         background: rgba(15, 23, 42, 0.7) !important;
         border: 1px solid rgba(0, 240, 255, 0.3) !important;
@@ -94,7 +92,6 @@ st.markdown(
         line-height: 1.1 !important;
     }
 
-    /* Onglets */
     button[data-baseweb="tab"] {
         background-color: transparent !important;
         color: #94a3b8 !important;
@@ -111,7 +108,6 @@ st.markdown(
         box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
     }
 
-    /* Boutons Néo-brutalistes */
     .stButton > button, div[data-testid="stForm"] button {
         background: linear-gradient(90deg, #7c3aed 0%, #0284c7 100%) !important;
         color: #ffffff !important;
@@ -194,7 +190,8 @@ def render_kpi(label: str, value: str, icon: str = ""):
 
 def build_cardmarket_url(slug: str, search_term: str) -> str:
   clean_slug = slug.strip().split("/")[0]
-  clean_term = re.sub(r"[\-\/,\.:]", " ", search_term)
+  # Nettoyage des slashes, tirets et caractères spéciaux
+  clean_term = re.sub(r"[\-\/,\.:#]", " ", search_term)
   clean_term = " ".join(clean_term.split())
   search_query = urllib.parse.quote(clean_term)
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
@@ -227,9 +224,11 @@ with tab1:
       prompt = """
       Identifie cette carte TCG.
       - Dans 'cardmarket_slug', donne STRICTEMENT la catégorie principale Cardmarket en UN SEUL MOT (ex: Pokemon, Magic, YuGiOh, Lorcana, OnePiece, DragonBallSuper, Riftbound). NE METS JAMAIS de sous-dossier ou de slash.
-      - Dans 'cardmarket_search_term', donne UNIQUEMENT le nom de la carte nettoyé pour la recherche : RETIRE TOUS les numéros de collection (ex: pas de 4/102, pas de 227/221), retire les tirets (-) et les caractères spéciaux.
-        Exemple 1 : "Dracaufeu 4/102" -> "Dracaufeu"
-        Exemple 2 : "Ahri - Inquisitive 227/221" -> "Ahri Inquisitive"
+      - Dans 'cardmarket_search_term', COMBINE le NOM DE LA CARTE et le NOM DE L'EXTENSION (ou code d'extension).
+        RÈGLES STRICTES : RETIRE TOUS les slashes (/), les tirets (-) et les numéros de collection sous forme de fraction.
+        Exemple 1 : Carte "Dracaufeu", Extension "Set de Base", Numéro "4/102" -> "Dracaufeu Set de Base"
+        Exemple 2 : Carte "Ahri - Inquisitive", Extension "Riftbound" -> "Ahri Inquisitive Riftbound"
+        Exemple 3 : Carte "Charizard ex", Extension "151", Numéro "199/165" -> "Charizard ex 151"
       """
 
       response = client.models.generate_content(
