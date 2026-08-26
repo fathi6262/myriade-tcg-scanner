@@ -27,7 +27,7 @@ creds = Credentials.from_service_account_info(
     st.secrets["gcp_service_account"], scopes=scopes
 )
 gc = gspread.authorize(creds)
-sheet = gc.open("Stock_Cartes_TCG").sheet1
+sheet = gc.open_by_key("1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo").sheet1
 
 # Interface
 tab1, tab2 = st.tabs(["📸 Scanner", "📦 Stock"])
