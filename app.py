@@ -4,6 +4,7 @@ import io
 import json
 import re
 import urllib.parse
+
 from google.oauth2.service_account import Credentials
 from groq import Groq
 import gspread
@@ -12,7 +13,7 @@ from PIL import Image
 import streamlit as st
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLES CSS
+# 1. CONFIGURATION DE LA PAGE & STYLES CSS (DA MYRIADE GAMES)
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Myriade Games — TCG Master Stock", page_icon="🔮", layout="wide"
@@ -220,7 +221,7 @@ def analyze_card_image_groq(image_bytes):
               },
           ],
       }],
-      model="llama-3.2-11b-vision-instruct",
+      model="llama-3.2-11b-vision-preview",
       response_format={"type": "json_object"},
   )
 
@@ -255,7 +256,7 @@ with tab1:
       image_input = st.camera_input("Prendre la carte en photo")
 
     if image_input:
-      with st.spinner("Analyse visuelle en cours par Llama Vision..."):
+      with st.spinner("Analyse visuelle en cours par Groq (Llama Vision)..."):
         pil_image = Image.open(image_input).convert("RGB")
         img_byte_arr = io.BytesIO()
         pil_image.save(img_byte_arr, format="JPEG")
