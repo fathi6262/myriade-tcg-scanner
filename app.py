@@ -221,7 +221,7 @@ def analyze_card_image_groq(image_bytes):
               },
           ],
       }],
-      model="llama-3.2-11b-vision-preview",
+      model="qwen/qwen3.6-27b",
       response_format={"type": "json_object"},
   )
 
@@ -256,7 +256,7 @@ with tab1:
       image_input = st.camera_input("Prendre la carte en photo")
 
     if image_input:
-      with st.spinner("Analyse visuelle en cours par Groq (Llama Vision)..."):
+      with st.spinner("Analyse visuelle en cours par Groq (Qwen Vision)..."):
         pil_image = Image.open(image_input).convert("RGB")
         img_byte_arr = io.BytesIO()
         pil_image.save(img_byte_arr, format="JPEG")
