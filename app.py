@@ -1,3 +1,4 @@
+import re
 import urllib.parse
 from datetime import datetime
 from google import genai
@@ -164,7 +165,7 @@ sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 
 # ---------------------------------------------------------
-# 3. SCHÉMA DE DONNÉES
+# 3. SCHÉMA DE DONNÉES & FONCTIONS UTILES
 # ---------------------------------------------------------
 class UniversalCard(BaseModel):
   game_name: str
@@ -172,6 +173,7 @@ class UniversalCard(BaseModel):
   set_name: str
   card_number: str
   cardmarket_slug: str
+  cardmarket_search_term: str
 
 
 def update_sheet_data(dataframe):
@@ -188,6 +190,14 @@ def render_kpi(label: str, value: str, icon: str = ""):
         <div class="kpi-value">{value}</div>
     </div>
     """
+
+
+def build_cardmarket_url(slug: str, search_term: str) -> str:
+  clean_slug = slug.strip().split("/")[0]
+  clean_term = re.sub(r"[\-\/,\.:]", " ", search_term)
+  clean_term = " ".join(clean_term.split())
+  search_query = urllib.parse.quote(clean_term)
+  return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
 # ---------------------------------------------------------
@@ -214,11 +224,13 @@ with tab1:
     with st.spinner("Analyse visuelle en cours par Gemini 3.6..."):
       pil_image = Image.open(image_input).convert("RGB")
 
-      prompt = (
-          "Identifie cette carte TCG. Donne le slug exact de la catégorie"
-          " Cardmarket dans 'cardmarket_slug' (ex: Magic, Pokemon, YuGiOh,"
-          " Lorcana, OnePiece, DragonBallSuper, FleshAndBlood)."
-      )
+      prompt = """
+      Identifie cette carte TCG.
+      - Dans 'cardmarket_slug', donne STRICTEMENT la catégorie principale Cardmarket en UN SEUL MOT (ex: Pokemon, Magic, YuGiOh, Lorcana, OnePiece, DragonBallSuper, Riftbound). NE METS JAMAIS de sous-dossier ou de slash.
+      - Dans 'cardmarket_search_term', donne UNIQUEMENT le nom de la carte nettoyé pour la recherche : RETIRE TOUS les numéros de collection (ex: pas de 4/102, pas de 227/221), retire les tirets (-) et les caractères spéciaux.
+        Exemple 1 : "Dracaufeu 4/102" -> "Dracaufeu"
+        Exemple 2 : "Ahri - Inquisitive 227/221" -> "Ahri Inquisitive"
+      """
 
       response = client.models.generate_content(
           model="gemini-3.6-flash",
@@ -240,10 +252,9 @@ with tab1:
     with col2:
       st.markdown(f"**Numéro :** {card.card_number}")
 
-    search_query = urllib.parse.quote(
-        f"{card.card_name} {card.card_number}".strip()
+    cardmarket_url = build_cardmarket_url(
+        card.cardmarket_slug, card.cardmarket_search_term
     )
-    cardmarket_url = f"https://www.cardmarket.com/fr/{card.cardmarket_slug}/Products/Search?searchString={search_query}"
 
     st.markdown(
         f'<p style="margin-top: 10px;"><a href="{cardmarket_url}"'
@@ -336,7 +347,7 @@ with tab2:
 
       st.markdown(f"**Cartes affichées ({len(filtered_df)})**")
 
-      # --- CARTES D'INVENTAIRE ---
+      # --- CARTES D'INVENTAIRE INTERACTIVES ---
       for idx, row in filtered_df.iterrows():
         with st.container():
           c_info, c_qty, c_actions, c_link = st.columns([4, 1.5, 2.5, 1.5])
