@@ -152,7 +152,7 @@ st.markdown(
 # ---------------------------------------------------------
 groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"].strip())
 
-SPREADSHEET_ID = "TON_ID_GOOGLE_SHEETS_ICI"
+SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
