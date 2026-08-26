@@ -194,7 +194,7 @@ def analyze_card_image_groq(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
-    Identifie cette carte TCG et réponds UNIQUEMENT sous la forme d'un objet JSON strict avec la structure suivante :
+    Identifie cette carte TCG et réponds uniquement avec un objet JSON structuré comme suit :
     {
       "game_name": "Pokemon",
       "card_name": "Dracaufeu ex",
@@ -206,7 +206,7 @@ def analyze_card_image_groq(image_bytes):
       "is_foil": "Holo/Foil",
       "estimated_price_eur": 2.50
     }
-    Règles : Pas de texte d'explication, uniquement le JSON. Remplis les vraies valeurs lues sur l'image.
+    Attention : Donne uniquement le bloc JSON complet, sans aucun texte d'explication.
     """
 
   chat_completion = groq_client.chat.completions.create(
@@ -223,12 +223,16 @@ def analyze_card_image_groq(image_bytes):
           ],
       }],
       model="qwen/qwen3.6-27b",
-      response_format={"type": "json_object"},
-      max_tokens=1000,
-      temperature=0.2,
+      max_tokens=2048,
+      temperature=0.1,
   )
 
-  return json.loads(chat_completion.choices[0].message.content)
+  raw_text = chat_completion.choices[0].message.content
+  json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+  if json_match:
+    return json.loads(json_match.group())
+  else:
+    raise ValueError(f"Impossible d'extraire le JSON : {raw_text}")
 
 
 # ---------------------------------------------------------
