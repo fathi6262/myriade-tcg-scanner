@@ -15,20 +15,17 @@ st.set_page_config(
     page_title="Myriade Games — TCG Scanner", page_icon="🔮", layout="wide"
 )
 
-# Injection CSS personnalisée pour la Direction Artistique
 st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=Inter:wght@400;600&display=swap');
 
-    /* Fond principal sombre et cosmique */
     .stApp {
         background: radial-gradient(circle at 50% 0%, #1a0b2e 0%, #080b11 70%) !important;
         color: #f1f5f9;
         font-family: 'Inter', sans-serif;
     }
 
-    /* En-tête personnalisé Myriade Games */
     .brand-title {
         font-family: 'Rajdhani', sans-serif;
         font-size: 3rem;
@@ -51,17 +48,16 @@ st.markdown(
         margin-bottom: 2rem;
     }
 
-    /* Cartes Glassmorphism */
-    div[data-testid="stForm"], div[data-testid="stMetric"], .css-1r6slb0, .stDataFrame {
+    /* Conteneurs & cartes Glassmorphic */
+    div[data-testid="stForm"], div[data-testid="stMetric"], .stDataFrame, div[data-testid="stExpander"] {
         background: rgba(15, 23, 42, 0.65) !important;
         border: 1px solid rgba(0, 240, 255, 0.2) !important;
         border-radius: 12px !important;
         box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
         backdrop-filter: blur(10px);
-        padding: 1.5rem;
     }
 
-    /* Onglets stylisés */
+    /* Onglets */
     button[data-baseweb="tab"] {
         background-color: transparent !important;
         color: #94a3b8 !important;
@@ -69,7 +65,6 @@ st.markdown(
         font-size: 1.2rem !important;
         font-weight: 600 !important;
         border-radius: 8px !important;
-        padding: 8px 16px !important;
     }
     
     button[aria-selected="true"] {
@@ -79,7 +74,7 @@ st.markdown(
         box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
     }
 
-    /* Boutons personnalisés avec effet Néon */
+    /* Boutons Néo-brutalistes */
     .stButton > button, div[data-testid="stForm"] button {
         background: linear-gradient(90deg, #7c3aed 0%, #0284c7 100%) !important;
         color: #ffffff !important;
@@ -88,10 +83,8 @@ st.markdown(
         font-family: 'Rajdhani', sans-serif !important;
         font-size: 1.1rem !important;
         font-weight: 700 !important;
-        letter-spacing: 1px !important;
-        box-shadow: 0 0 15px rgba(0, 240, 255, 0.3) !important;
+        box-shadow: 0 0 15px rgba(0, 240, 255, 0.2) !important;
         transition: all 0.3s ease !important;
-        width: 100%;
     }
     
     .stButton > button:hover, div[data-testid="stForm"] button:hover {
@@ -99,18 +92,12 @@ st.markdown(
         transform: translateY(-2px);
     }
 
-    /* Liens hypertexte style Cristal */
     a {
         color: #00f0ff !important;
         text-decoration: none !important;
         font-weight: 600;
-        transition: all 0.2s;
-    }
-    a:hover {
-        text-shadow: 0 0 8px rgba(0, 240, 255, 0.8);
     }
 
-    /* Metrics personnalisé */
     div[data-testid="stMetricValue"] {
         color: #00f0ff !important;
         font-family: 'Rajdhani', sans-serif !important;
@@ -121,7 +108,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# En-tête visuel
+# En-tête
 st.markdown(
     '<div class="brand-title">✨ Myriade Games</div>', unsafe_allow_html=True
 )
@@ -136,8 +123,7 @@ st.markdown(
 # ---------------------------------------------------------
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-# Remplace par l'ID de ton Google Sheets
-SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
+SPREADSHEET_ID = "TON_ID_GOOGLE_SHEETS_ICI"
 
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
@@ -161,7 +147,7 @@ class UniversalCard(BaseModel):
 # ---------------------------------------------------------
 # 4. APPLICATION STREAMLIT
 # ---------------------------------------------------------
-tab1, tab2 = st.tabs(["📸 Scanner une carte", "📦 Inventaire du Stock"])
+tab1, tab2 = st.tabs(["📸 Scanner une carte", "📦 Gestion du Stock"])
 
 # --- ONGLET 1 : SCANNER ---
 with tab1:
@@ -198,7 +184,6 @@ with tab1:
       )
       card = response.parsed
 
-    # Affichage des résultats stylisé
     st.markdown("---")
     st.subheader(f"🔮 {card.card_name}")
 
@@ -209,7 +194,6 @@ with tab1:
     with col2:
       st.markdown(f"**Numéro :** {card.card_number}")
 
-    # Lien Cardmarket
     search_query = urllib.parse.quote(
         f"{card.card_name} {card.card_number}".strip()
     )
@@ -222,7 +206,6 @@ with tab1:
         unsafe_allow_html=True,
     )
 
-    # Formulaire d'ajout
     with st.form("add_to_stock_form"):
       quantite = st.number_input(
           "Quantité à ajouter au stock", min_value=1, value=1, step=1
@@ -244,32 +227,147 @@ with tab1:
             f"✅ {quantite}x {card.card_name} ajouté(s) à la base de données !"
         )
 
-# --- ONGLET 2 : INVENTAIRE ---
+# --- ONGLET 2 : OUTIL DE GESTION DE STOCK ---
 with tab2:
-  if st.button("🔄 Rafraîchir l'inventaire"):
-    st.rerun()
-
   try:
     records = sheet.get_all_records()
+
     if records:
       df = pd.DataFrame(records)
 
-      col_m1, col_m2 = st.columns(2)
-      col_m1.metric("Cartes référencées", len(df))
-      col_m2.metric(
-          "Total exemplaires",
-          int(df["Quantité"].sum()) if "Quantité" in df else 0,
+      # Normalisation du type de la colonne Quantité
+      df["Quantité"] = pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
+
+      # Top Metrics
+      col_m1, col_m2, col_m3 = st.columns(3)
+      col_m1.metric("Références uniques", len(df))
+      col_m2.metric("Total exemplaires", int(df["Quantité"].sum()))
+      col_m3.metric("Jeux en stock", df["Jeu"].nunique() if "Jeu" in df else 0)
+
+      st.markdown("---")
+
+      # --- SECTION 1 : AJUSTEMENT RAPIDE ---
+      with st.expander(
+          "⚡ **Ajustement Rapide (Ajouter / Retirer / Supprimer)**",
+          expanded=True,
+      ):
+        # Création de la liste des cartes pour la sélection
+        df["label_select"] = (
+            df["Jeu"]
+            + " — "
+            + df["Nom"]
+            + " ("
+            + df["Numéro"]
+            + ") [Stock: "
+            + df["Quantité"].astype(str)
+            + "]"
+        )
+        selected_label = st.selectbox(
+            "Rechercher et sélectionner une carte à modifier :",
+            df["label_select"].tolist(),
+        )
+
+        if selected_label:
+          selected_idx = df[df["label_select"] == selected_label].index[0]
+          current_qty = int(df.loc[selected_idx, "Quantité"])
+          card_title = df.loc[selected_idx, "Nom"]
+
+          col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+
+          if col_b1.button("➕ Ajouter (+1)"):
+            df.loc[selected_idx, "Quantité"] += 1
+            df_to_save = df.drop(columns=["label_select"])
+            sheet.clear()
+            sheet.update(
+                [df_to_save.columns.values.tolist()]
+                + df_to_save.astype(str).values.tolist()
+            )
+            st.toast(f"+1 {card_title} (Nouveau stock : {current_qty + 1})")
+            st.rerun()
+
+          if col_b2.button("➖ Retirer (-1)"):
+            if current_qty > 1:
+              df.loc[selected_idx, "Quantité"] -= 1
+              df_to_save = df.drop(columns=["label_select"])
+              sheet.clear()
+              sheet.update(
+                  [df_to_save.columns.values.tolist()]
+                  + df_to_save.astype(str).values.tolist()
+              )
+              st.toast(f"-1 {card_title} (Nouveau stock : {current_qty - 1})")
+            else:
+              # Suppression automatique si stock passe à 0
+              df = df.drop(selected_idx)
+              df_to_save = df.drop(columns=["label_select"])
+              sheet.clear()
+              if not df_to_save.empty:
+                sheet.update(
+                    [df_to_save.columns.values.tolist()]
+                    + df_to_save.astype(str).values.tolist()
+                )
+              st.toast(f"🗑️ {card_title} retiré du stock (Quantité = 0)")
+            st.rerun()
+
+          if col_b3.button("🗑️ Supprimer l'entrée"):
+            df = df.drop(selected_idx)
+            df_to_save = df.drop(columns=["label_select"])
+            sheet.clear()
+            if not df_to_save.empty:
+              sheet.update(
+                  [df_to_save.columns.values.tolist()]
+                  + df_to_save.astype(str).values.tolist()
+              )
+            st.toast(f"🗑️ {card_title} supprimé de la base.")
+            st.rerun()
+
+          if col_b4.button("🔄 Rafraîchir"):
+            st.rerun()
+
+      # Drop de la colonne temporaire
+      df = df.drop(columns=["label_select"])
+
+      # --- SECTION 2 : ÉDITEUR EN GRILLE DE MASSE ---
+      st.markdown("### ✏️ Éditeur de masse (Format Tableur)")
+      st.caption(
+          "Modifie directement les cases dans le tableau ci-dessous, puis"
+          " clique sur **Sauvegarder**."
       )
 
-      st.markdown("<br>", unsafe_allow_html=True)
-      st.dataframe(
+      edited_df = st.data_editor(
           df,
           use_container_width=True,
+          num_rows="dynamic",
           column_config={
-              "Lien Cardmarket": st.column_config.LinkColumn("Lien Fiche")
+              "Lien Cardmarket": st.column_config.LinkColumn(
+                  "Fiche Prix", read_only=True
+              ),
+              "Date": st.column_config.TextColumn(
+                  "Date d'ajout", read_only=True
+              ),
+              "Quantité": st.column_config.NumberColumn(
+                  "Quantité", min_value=0, step=1, required=True
+              ),
           },
+          hide_index=True,
       )
+
+      if st.button("💾 Sauvegarder les modifications de la grille"):
+        # Élimination des lignes avec une quantité de 0 ou vide
+        edited_df["Quantité"] = pd.to_numeric(
+            edited_df["Quantité"], errors="coerce"
+        ).fillna(0)
+        final_df = edited_df[edited_df["Quantité"] > 0]
+
+        sheet.clear()
+        sheet.update(
+            [final_df.columns.values.tolist()]
+            + final_df.astype(str).values.tolist()
+        )
+        st.success("✅ Stock mis à jour avec succès sur Google Sheets !")
+        st.rerun()
+
     else:
-      st.info("L'inventaire est vide pour le moment.")
+      st.info("L'inventaire est actuellement vide. Scanne une carte pour commencer !")
+
   except Exception as e:
     st.error(f"Erreur d'accès à la base de données : {e}")
