@@ -220,8 +220,7 @@ with tab1:
     image_input = st.camera_input("Prendre une photo de la carte")
 
   if image_input:
-    with st.spinner("Analyse visuelle en cours par l'IA..."):
-      # Conversion de l'image PIL en octets JPEG
+    with st.spinner("Analyse visuelle en cours par Gemini 3.6..."):
       pil_image = Image.open(image_input).convert("RGB")
       img_byte_arr = io.BytesIO()
       pil_image.save(img_byte_arr, format="JPEG")
@@ -243,7 +242,7 @@ with tab1:
 
       try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=[image_part, prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -298,10 +297,7 @@ with tab1:
             )
 
       except Exception as e:
-        st.error(
-            "❌ Erreur lors de l'appel à l'API Google : Vérifie que la clé n'est"
-            f" pas restreinte dans Google Cloud.\nDétail de l'erreur : {e}"
-        )
+        st.error(f"❌ Erreur lors de l'appel API Gemini 3.6 : {e}")
 
 # --- ONGLET 2 : INVENTAIRE ---
 with tab2:
