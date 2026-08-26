@@ -1,21 +1,18 @@
+import base64
 from datetime import datetime
 import io
+import json
 import re
-import time
 import urllib.parse
-
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
 from google.oauth2.service_account import Credentials
+from groq import Groq
 import gspread
 import pandas as pd
 from PIL import Image
-from pydantic import BaseModel
 import streamlit as st
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLES CSS (DA MYRIADE GAMES)
+# 1. CONFIGURATION DE LA PAGE & STYLES CSS
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Myriade Games — TCG Master Stock", page_icon="🔮", layout="wide"
@@ -151,12 +148,11 @@ st.markdown(
 )
 
 # ---------------------------------------------------------
-# 2. CONFIGURATION DES API ET ACCÈS
+# 2. CONFIGURATION DES API (GROQ + GOOGLE SHEETS)
 # ---------------------------------------------------------
-api_key = st.secrets["GEMINI_API_KEY"].strip()
-client = genai.Client(api_key=api_key)
+groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"].strip())
 
-SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
+SPREADSHEET_ID = "TON_ID_GOOGLE_SHEETS_ICI"
 
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
@@ -167,20 +163,8 @@ sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 
 # ---------------------------------------------------------
-# 3. SCHÉMA DE DONNÉES ENRICHI & FONCTIONS UTILES
+# 3. FONCTIONS UTILITAIRES
 # ---------------------------------------------------------
-class UniversalCard(BaseModel):
-  game_name: str
-  card_name: str
-  set_name: str
-  card_number: str
-  cardmarket_slug: str
-  cardmarket_search_term: str
-  language: str
-  is_foil: str
-  estimated_price_eur: float
-
-
 def update_sheet_data(dataframe):
   sheet.clear()
   sheet.update(
@@ -205,41 +189,42 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
-def analyze_card_image_with_retry(image_bytes):
-  image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+def analyze_card_image_groq(image_bytes):
+  base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
-    Identifie cette carte TCG avec haute précision.
-    - Dans 'cardmarket_slug', donne STRICTEMENT la catégorie principale Cardmarket en UN SEUL MOT (ex: Pokemon, Magic, YuGiOh, Lorcana, OnePiece, DragonBallSuper, Riftbound). NE METS JAMAIS de sous-dossier ou de slash.
-    - Dans 'cardmarket_search_term', COMBINE le NOM DE LA CARTE et le NOM DE L'EXTENSION (ou code d'extension). RETIRE TOUS les slashes (/), tirets (-) et numéros sous forme de fraction.
-    - Dans 'language', indique la langue visible sur la carte (ex: FR, EN, JP, DE).
-    - Dans 'is_foil', indique 'Holo/Foil', 'Reverse' ou 'Normal'.
-    - Dans 'estimated_price_eur', donne une estimation numérique réaliste en euros (ex: 2.50).
+    Identifie cette carte TCG et réponds EXCLUSIVEMENT au format JSON strict respectant cette structure exacte :
+    {
+      "game_name": "Nom du jeu (ex: Pokemon, Magic, Lorcana, Yu-Gi-Oh!)",
+      "card_name": "Nom exact de la carte",
+      "set_name": "Nom de l'extension",
+      "card_number": "Numéro de la carte (ex: 199/165)",
+      "cardmarket_slug": "Catégorie principale Cardmarket en un seul mot (ex: Pokemon, Magic, YuGiOh, Lorcana)",
+      "cardmarket_search_term": "Nom de la carte et extension combinés sans slashes ni tirets",
+      "language": "Code langue (FR, EN, JP, DE)",
+      "is_foil": "Holo/Foil, Reverse ou Normal",
+      "estimated_price_eur": 2.50
+    }
     """
 
-  max_retries = 3
-  for attempt in range(max_retries):
-    try:
-      response = client.models.generate_content(
-          model="gemini-1.5-flash",
-          contents=[image_part, prompt],
-          config=types.GenerateContentConfig(
-              response_mime_type="application/json",
-              response_schema=UniversalCard,
-          ),
-      )
-      return response.parsed
-    except APIError as e:
-      if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-        if attempt < max_retries - 1:
-          st.toast(
-              f"⏳ Quota dépassé. Pause de 15s... ({attempt + 1}/{max_retries})"
-          )
-          time.sleep(15)
-        else:
-          raise e
-      else:
-        raise e
+  chat_completion = groq_client.chat.completions.create(
+      messages=[{
+          "role": "user",
+          "content": [
+              {"type": "text", "text": prompt},
+              {
+                  "type": "image_url",
+                  "image_url": {
+                      "url": f"data:image/jpeg;base64,{base64_image}"
+                  },
+              },
+          ],
+      }],
+      model="llama-3.2-11b-vision-instruct",
+      response_format={"type": "json_object"},
+  )
+
+  return json.loads(chat_completion.choices[0].message.content)
 
 
 # ---------------------------------------------------------
@@ -247,7 +232,7 @@ def analyze_card_image_with_retry(image_bytes):
 # ---------------------------------------------------------
 tab1, tab2 = st.tabs(["📸 Scanner & Importer", "📦 Gestion du Stock"])
 
-# --- ONGLET 1 : SCANNER (SOLO ET BATCH) ---
+# --- ONGLET 1 : SCANNER ---
 with tab1:
   scan_mode = st.radio(
       "Mode de traitement :",
@@ -255,7 +240,6 @@ with tab1:
       horizontal=True,
   )
 
-  # --- MODE UNITE ---
   if scan_mode == "🎴 Unité (Caméra / Fichier)":
     source_type = st.radio(
         "Source d'image :",
@@ -271,31 +255,32 @@ with tab1:
       image_input = st.camera_input("Prendre la carte en photo")
 
     if image_input:
-      with st.spinner("Analyse visuelle par Gemini 3.6..."):
+      with st.spinner("Analyse visuelle en cours par Llama Vision..."):
         pil_image = Image.open(image_input).convert("RGB")
         img_byte_arr = io.BytesIO()
         pil_image.save(img_byte_arr, format="JPEG")
-        image_bytes = img_byte_arr.getvalue()
 
         try:
-          card = analyze_card_image_with_retry(image_bytes)
+          card = analyze_card_image_groq(img_byte_arr.getvalue())
 
           st.markdown("---")
-          st.subheader(f"🔮 {card.card_name}")
+          st.subheader(f"🔮 {card.get('card_name', 'Carte inconnue')}")
 
           col1, col2, col3 = st.columns(3)
           with col1:
-            st.markdown(f"**Jeu :** `{card.game_name}`")
-            st.markdown(f"**Extension :** {card.set_name}")
+            st.markdown(f"**Jeu :** `{card.get('game_name', 'N/A')}`")
+            st.markdown(f"**Extension :** {card.get('set_name', 'N/A')}")
           with col2:
-            st.markdown(f"**Numéro :** {card.card_number}")
-            st.markdown(f"**Langue :** {card.language}")
+            st.markdown(f"**Numéro :** {card.get('card_number', 'N/A')}")
+            st.markdown(f"**Langue :** {card.get('language', 'FR')}")
           with col3:
-            st.markdown(f"**Finition :** {card.is_foil}")
-            st.markdown(f"**Cote est. :** ~{card.estimated_price_eur:.2f} €")
+            st.markdown(f"**Finition :** {card.get('is_foil', 'Normal')}")
+            price = float(card.get("estimated_price_eur", 0.0))
+            st.markdown(f"**Cote est. :** ~{price:.2f} €")
 
           cardmarket_url = build_cardmarket_url(
-              card.cardmarket_slug, card.cardmarket_search_term
+              card.get("cardmarket_slug", "Pokemon"),
+              card.get("cardmarket_search_term", card.get("card_name", "")),
           )
           st.markdown(
               f'<p style="margin-top: 5px;"><a href="{cardmarket_url}"'
@@ -329,27 +314,25 @@ with tab1:
               date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
               sheet.append_row([
                   date_str,
-                  card.game_name,
-                  card.card_name,
-                  card.set_name,
-                  card.card_number,
-                  card.is_foil,
-                  card.language,
+                  card.get("game_name", ""),
+                  card.get("card_name", ""),
+                  card.get("set_name", ""),
+                  card.get("card_number", ""),
+                  card.get("is_foil", "Normal"),
+                  card.get("language", "FR"),
                   condition,
                   emplacement,
                   quantite,
-                  card.estimated_price_eur,
+                  price,
                   cardmarket_url,
               ])
-              st.success(f"✅ {card.card_name} enregistré avec succès !")
+              st.success(
+                  f"✅ {card.get('card_name')} enregistré avec succès !"
+              )
 
         except Exception as e:
-          st.error(
-              f"⚠️ **Erreur lors du scan :** {e}\n\nSi le quota est dépassé,"
-              " active la facturation sur Google AI Studio."
-          )
+          st.error(f"⚠️ Erreur d'analyse : {e}")
 
-  # --- MODE SCAN EN LOT ---
   else:
     uploaded_files = st.file_uploader(
         "Importe plusieurs images de cartes simultanément",
@@ -384,9 +367,7 @@ with tab1:
           pil_img.save(img_byte_arr, format="JPEG")
 
           try:
-            parsed_card = analyze_card_image_with_retry(
-                img_byte_arr.getvalue()
-            )
+            parsed_card = analyze_card_image_groq(img_byte_arr.getvalue())
             analyzed_cards.append(parsed_card)
           except Exception as e:
             st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
@@ -397,19 +378,22 @@ with tab1:
         st.success("Analyse du lot terminée !")
 
     if "batch_results" in st.session_state and st.session_state["batch_results"]:
-      st.markdown("### 📋 Récapitulatif du lot avant enregistrement")
+      st.markdown("### 📋 Récapitulatif du lot")
 
       batch_data = []
       for c in st.session_state["batch_results"]:
-        url = build_cardmarket_url(c.cardmarket_slug, c.cardmarket_search_term)
+        url = build_cardmarket_url(
+            c.get("cardmarket_slug", "Pokemon"),
+            c.get("cardmarket_search_term", c.get("card_name", "")),
+        )
         batch_data.append({
-            "Jeu": c.game_name,
-            "Nom": c.card_name,
-            "Extension": c.set_name,
-            "Numéro": c.card_number,
-            "Finition": c.is_foil,
-            "Langue": c.language,
-            "Prix Est. (€)": c.estimated_price_eur,
+            "Jeu": c.get("game_name", ""),
+            "Nom": c.get("card_name", ""),
+            "Extension": c.get("set_name", ""),
+            "Numéro": c.get("card_number", ""),
+            "Finition": c.get("is_foil", "Normal"),
+            "Langue": c.get("language", "FR"),
+            "Prix Est. (€)": c.get("estimated_price_eur", 0.0),
             "URL": url,
         })
 
@@ -437,7 +421,7 @@ with tab1:
         del st.session_state["batch_results"]
         st.rerun()
 
-# --- ONGLET 2 : INVENTAIRE ET GESTION COMPLÈTE ---
+# --- ONGLET 2 : INVENTAIRE ---
 with tab2:
   try:
     records = sheet.get_all_records()
@@ -445,7 +429,6 @@ with tab2:
     if records:
       df = pd.DataFrame(records)
 
-      # Conversion des valeurs numériques
       df["Quantité"] = (
           pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
       )
@@ -454,7 +437,6 @@ with tab2:
       ).fillna(0.0)
       df["Valeur Totale (€)"] = df["Quantité"] * df["Prix Est. (€)"]
 
-      # --- KPI AVANCÉS ---
       col_m1, col_m2, col_m3, col_m4 = st.columns(4)
       with col_m1:
         st.markdown(
@@ -486,7 +468,6 @@ with tab2:
 
       st.markdown("<br>", unsafe_allow_html=True)
 
-      # --- RECHERCHE, FILTRE ET EXPORT CSV ---
       c_src, c_flt, c_exp = st.columns([2, 1, 1])
       with c_src:
         search_term = st.text_input(
@@ -506,7 +487,6 @@ with tab2:
             mime="text/csv",
         )
 
-      # Filtrage dynamique
       filtered_df = df.copy()
       if selected_game != "Tous les jeux":
         filtered_df = filtered_df[filtered_df["Jeu"] == selected_game]
@@ -523,7 +503,6 @@ with tab2:
 
       st.markdown(f"**Cartes affichées ({len(filtered_df)})**")
 
-      # --- FICHIERS D'INVENTAIRE INTERACTIFS ---
       for idx, row in filtered_df.iterrows():
         with st.container():
           c_info, c_details, c_qty, c_actions, c_link = st.columns(
