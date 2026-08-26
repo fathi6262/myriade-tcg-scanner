@@ -1,7 +1,7 @@
+from datetime import datetime
 import io
 import re
 import urllib.parse
-from datetime import datetime
 from google import genai
 from google.oauth2.service_account import Credentials
 import gspread
@@ -151,7 +151,7 @@ st.markdown(
 # ---------------------------------------------------------
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
+SPREADSHEET_ID = "TON_ID_GOOGLE_SHEETS_ICI"
 
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
@@ -162,7 +162,7 @@ sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 
 # ---------------------------------------------------------
-# 3. SCHÉMA DE DONNÉES & FONCTIONS UTILES
+# 3. SCHÉMA DE DONNÉES & FONCTIONS
 # ---------------------------------------------------------
 class UniversalCard(BaseModel):
   game_name: str
@@ -171,9 +171,9 @@ class UniversalCard(BaseModel):
   card_number: str
   cardmarket_slug: str
   cardmarket_search_term: str
-  language: str  # ex: FR, EN, JP
-  is_foil: str  # Normal, Holo/Foil, Reverse
-  estimated_price_eur: float  # Estimation indicative du prix du marché
+  language: str
+  is_foil: str
+  estimated_price_eur: float
 
 
 def update_sheet_data(dataframe):
@@ -210,15 +210,30 @@ def analyze_card_image(pil_image):
     - Dans 'estimated_price_eur', donne une estimation numérique réaliste en euros (ex: 2.50).
     """
 
-  response = client.models.generate_content(
-      model="gemini-3.6-flash",
-      contents=[pil_image, prompt],
-      config={
-          "response_mime_type": "application/json",
-          "response_schema": UniversalCard,
-      },
-  )
-  return response.parsed
+  try:
+    response = client.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=[pil_image, prompt],
+        config={
+            "response_mime_type": "application/json",
+            "response_schema": UniversalCard,
+        },
+    )
+    return response.parsed
+  except Exception:
+    st.warning(
+        "⚠️ 'gemini-3.6-flash' indisponible sur ce quota. Repli automatique"
+        " sur 'gemini-2.5-flash'."
+    )
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[pil_image, prompt],
+        config={
+            "response_mime_type": "application/json",
+            "response_schema": UniversalCard,
+        },
+    )
+    return response.parsed
 
 
 # ---------------------------------------------------------
@@ -226,7 +241,7 @@ def analyze_card_image(pil_image):
 # ---------------------------------------------------------
 tab1, tab2 = st.tabs(["📸 Scanner & Importer", "📦 Gestion du Stock"])
 
-# --- ONGLET 1 : SCANNER (SOLO ET BATCH) ---
+# --- ONGLET 1 : SCANNER (SOLO & BATCH) ---
 with tab1:
   scan_mode = st.radio(
       "Mode de traitement :",
@@ -234,7 +249,6 @@ with tab1:
       horizontal=True,
   )
 
-  # --- MODE UNITE ---
   if scan_mode == "🎴 Unité (Caméra / Fichier)":
     source_type = st.radio(
         "Source d'image :",
@@ -250,7 +264,7 @@ with tab1:
       image_input = st.camera_input("Prendre la carte en photo")
 
     if image_input:
-      with st.spinner("Analyse par l'IA Gemini 3.6..."):
+      with st.spinner("Analyse par l'IA..."):
         pil_image = Image.open(image_input).convert("RGB")
         card = analyze_card_image(pil_image)
 
@@ -277,7 +291,6 @@ with tab1:
           unsafe_allow_html=True,
       )
 
-      # Formulaire avec état et emplacement
       with st.form("single_add_form"):
         c_qty, c_cond, c_loc = st.columns(3)
         with c_qty:
@@ -318,7 +331,6 @@ with tab1:
           ])
           st.success(f"✅ {card.card_name} enregistré avec succès !")
 
-  # --- MODE BATCH / MULTIPLE ---
   else:
     uploaded_files = st.file_uploader(
         "Importe plusieurs images de cartes en même temps",
@@ -397,7 +409,7 @@ with tab1:
         del st.session_state["batch_results"]
         st.rerun()
 
-# --- ONGLET 2 : INVENTAIRE ET GESTION COMPLÈTE ---
+# --- ONGLET 2 : INVENTAIRE ---
 with tab2:
   try:
     records = sheet.get_all_records()
@@ -412,7 +424,6 @@ with tab2:
       ).fillna(0.0)
       df["Valeur Totale (€)"] = df["Quantité"] * df["Prix Est. (€)"]
 
-      # --- KPI AVANCÉS ---
       col_m1, col_m2, col_m3, col_m4 = st.columns(4)
       with col_m1:
         st.markdown(
@@ -444,7 +455,6 @@ with tab2:
 
       st.markdown("<br>", unsafe_allow_html=True)
 
-      # --- BARRE DE RECHERCHE, FILTRES ET EXPORT ---
       c_src, c_flt, c_exp = st.columns([2, 1, 1])
       with c_src:
         search_term = st.text_input(
@@ -455,7 +465,6 @@ with tab2:
         selected_game = st.selectbox("🎮 Filtrer par jeu", jeux_dispos)
       with c_exp:
         st.markdown("<br>", unsafe_allow_html=True)
-        # Génération du fichier CSV téléchargeable
         csv_buffer = io.StringIO()
         df.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
         st.download_button(
@@ -465,7 +474,6 @@ with tab2:
             mime="text/csv",
         )
 
-      # Filtrage dynamique
       filtered_df = df.copy()
       if selected_game != "Tous les jeux":
         filtered_df = filtered_df[filtered_df["Jeu"] == selected_game]
@@ -482,7 +490,6 @@ with tab2:
 
       st.markdown(f"**Cartes affichées ({len(filtered_df)})**")
 
-      # --- CARTES D'INVENTAIRE COMPLÈTES ---
       for idx, row in filtered_df.iterrows():
         with st.container():
           c_info, c_details, c_qty, c_actions, c_link = st.columns(
