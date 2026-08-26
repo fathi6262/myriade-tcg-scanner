@@ -14,13 +14,13 @@ st.set_page_config(page_title="TCG Scanner & Stock", layout="wide")
 # 1. CONFIGURATION DES API ET ACCÈS
 # ---------------------------------------------------------
 
-# Initialisation du client Gemini
+# Client Gemini
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-# COLLE ICI L'ID DE TON GOOGLE SHEETS (trouvable dans l'URL entre /d/ et /edit)
+# Remplace par l'ID de ton Google Sheets (situé dans l'URL entre /d/ et /edit)
 SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 
-# Connexion à Google Sheets via le compte de service
+# Connexion Google Sheets
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
     st.secrets["gcp_service_account"], scopes=scopes
@@ -48,13 +48,24 @@ tab1, tab2 = st.tabs(["📸 Scanner", "📦 Mon Stock"])
 # --- ONGLET 1 : SCANNER ---
 with tab1:
   st.header("Ajouter une carte au stock")
-  image_input = st.camera_input("Prendre une photo") or st.file_uploader(
-      "Ou importer une image", type=["jpg", "png", "webp"]
+
+  # Choix de la source d'image (PC ou Mobile)
+  source_type = st.radio(
+      "Mode d'importation :",
+      ["💻 Fichier (PC / Galerie)", "📷 Caméra"],
+      horizontal=True,
   )
+
+  if source_type == "💻 Fichier (PC / Galerie)":
+    image_input = st.file_uploader(
+        "Glisse-dépose ton image ici ou clique pour parcourir tes fichiers",
+        type=["jpg", "jpeg", "png", "webp"],
+    )
+  else:
+    image_input = st.camera_input("Prendre une photo")
 
   if image_input:
     with st.spinner("Analyse visuelle par l'IA..."):
-      # Conversion de l'image en objet PIL pour l'API Gemini
       pil_image = Image.open(image_input)
 
       prompt = (
@@ -63,7 +74,6 @@ with tab1:
           " Lorcana, OnePiece, DragonBallSuper)."
       )
 
-      # Appel à Gemini 2.5 Flash
       response = client.models.generate_content(
           model="gemini-2.5-flash",
           contents=[pil_image, prompt],
@@ -74,7 +84,7 @@ with tab1:
       )
       card = response.parsed
 
-    # Affichage des métadonnées
+    # Affichage des infos extraites
     st.success(f"Carte détectée : **{card.card_name}**")
 
     col1, col2 = st.columns(2)
@@ -84,7 +94,7 @@ with tab1:
     with col2:
       st.write(f"**Numéro :** {card.card_number}")
 
-    # Génération du lien de recherche Cardmarket
+    # Lien direct Cardmarket
     search_query = urllib.parse.quote(
         f"{card.card_name} {card.card_number}".strip()
     )
@@ -92,7 +102,7 @@ with tab1:
 
     st.markdown(f"[👉 **Voir la fiche et les prix sur Cardmarket**]({cardmarket_url})")
 
-    # Formulaire de sauvegarde dans Google Sheets
+    # Enregistrement
     with st.form("add_to_stock_form"):
       quantite = st.number_input(
           "Quantité à ajouter", min_value=1, value=1, step=1
