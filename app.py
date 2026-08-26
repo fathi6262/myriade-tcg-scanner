@@ -14,13 +14,11 @@ st.set_page_config(page_title="TCG Scanner & Stock", layout="wide")
 # 1. CONFIGURATION DES API ET ACCÈS
 # ---------------------------------------------------------
 
-# Client Gemini
 client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 
-# Remplace par l'ID de ton Google Sheets (situé dans l'URL entre /d/ et /edit)
+# Remplace par l'ID de ton Google Sheets (dans l'URL entre /d/ et /edit)
 SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 
-# Connexion Google Sheets
 scopes = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
     st.secrets["gcp_service_account"], scopes=scopes
@@ -49,7 +47,6 @@ tab1, tab2 = st.tabs(["📸 Scanner", "📦 Mon Stock"])
 with tab1:
   st.header("Ajouter une carte au stock")
 
-  # Choix de la source d'image (PC ou Mobile)
   source_type = st.radio(
       "Mode d'importation :",
       ["💻 Fichier (PC / Galerie)", "📷 Caméra"],
@@ -65,8 +62,9 @@ with tab1:
     image_input = st.camera_input("Prendre une photo")
 
   if image_input:
-    with st.spinner("Analyse visuelle par l'IA..."):
-      pil_image = Image.open(image_input)
+    with st.spinner("Analyse visuelle par Gemini 3.6 Flash..."):
+      # Conversion de l'image en RGB pour éviter les erreurs de transparence (PNG/WebP sur PC)
+      pil_image = Image.open(image_input).convert("RGB")
 
       prompt = (
           "Identifie cette carte TCG. Donne le slug exact de la catégorie"
@@ -75,7 +73,7 @@ with tab1:
       )
 
       response = client.models.generate_content(
-          model="gemini-2.5-flash",
+          model="gemini-3.6-flash",
           contents=[pil_image, prompt],
           config={
               "response_mime_type": "application/json",
@@ -84,7 +82,6 @@ with tab1:
       )
       card = response.parsed
 
-    # Affichage des infos extraites
     st.success(f"Carte détectée : **{card.card_name}**")
 
     col1, col2 = st.columns(2)
@@ -94,7 +91,6 @@ with tab1:
     with col2:
       st.write(f"**Numéro :** {card.card_number}")
 
-    # Lien direct Cardmarket
     search_query = urllib.parse.quote(
         f"{card.card_name} {card.card_number}".strip()
     )
@@ -102,7 +98,6 @@ with tab1:
 
     st.markdown(f"[👉 **Voir la fiche et les prix sur Cardmarket**]({cardmarket_url})")
 
-    # Enregistrement
     with st.form("add_to_stock_form"):
       quantite = st.number_input(
           "Quantité à ajouter", min_value=1, value=1, step=1
