@@ -194,10 +194,7 @@ def analyze_card_image_groq(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
-    Identifie cette carte TCG et réponds DIRECTEMENT avec l'objet JSON. 
-    NE METS AUCUNE BALISE <think> ET NE FAIS AUCUNE EXPLICATION. Commences directement par le caractère {
-
-    Structure attendue :
+    Identifie cette carte TCG et génère l'objet JSON suivant :
     {
       "game_name": "Nom du jeu",
       "card_name": "Nom de la carte",
@@ -212,34 +209,48 @@ def analyze_card_image_groq(image_bytes):
     """
 
   chat_completion = groq_client.chat.completions.create(
-      messages=[{
-          "role": "user",
-          "content": [
-              {"type": "text", "text": prompt},
-              {
-                  "type": "image_url",
-                  "image_url": {
-                      "url": f"data:image/jpeg;base64,{base64_image}"
+      messages=[
+          {
+              "role": "system",
+              "content": (
+                  "Tu es un extracteur de données TCG automatisé. Tu réponds"
+                  " EXCLUSIVEMENT au format JSON. NE FAIS AUCUNE RÉFLEXION, N'ÉCRIS"
+                  " PAS DE BALISE <think> ET AUCUN TEXTE D'EXPLICATION."
+              ),
+          },
+          {
+              "role": "user",
+              "content": [
+                  {"type": "text", "text": prompt},
+                  {
+                      "type": "image_url",
+                      "image_url": {
+                          "url": f"data:image/jpeg;base64,{base64_image}"
+                      },
                   },
-              },
-          ],
-      }],
+              ],
+          },
+      ],
       model="qwen/qwen3.6-27b",
-      max_tokens=2048,
-      temperature=0.1,
+      max_tokens=4096,
+      temperature=0.0,
   )
 
   raw_text = chat_completion.choices[0].message.content
 
-  # Nettoyage des balises de pensée <think>...</think>
+  # Nettoyage des balises de réflexion
   clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
 
   # Extraction du JSON
   json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
   if json_match:
     return json.loads(json_match.group())
-  else:
-    raise ValueError(f"Impossible d'extraire le JSON : {raw_text}")
+
+  json_match_raw = re.search(r"\{.*\}", raw_text, re.DOTALL)
+  if json_match_raw:
+    return json.loads(json_match_raw.group())
+
+  raise ValueError(f"Impossible d'extraire le JSON : {raw_text}")
 
 
 # ---------------------------------------------------------
