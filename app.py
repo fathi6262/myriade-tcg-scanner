@@ -9,7 +9,7 @@ from pydantic import BaseModel
 import streamlit as st
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLES CSS
+# 1. CONFIGURATION DE LA PAGE & STYLES CSS (DA MYRIADE GAMES)
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Myriade Games — TCG Scanner", page_icon="🔮", layout="wide"
@@ -28,7 +28,7 @@ st.markdown(
 
     .brand-title {
         font-family: 'Rajdhani', sans-serif;
-        font-size: 3rem;
+        font-size: 2.8rem;
         font-weight: 700;
         text-align: center;
         background: linear-gradient(90deg, #a855f7 0%, #00f0ff 100%);
@@ -42,13 +42,14 @@ st.markdown(
     .brand-subtitle {
         text-align: center;
         color: #94a3b8;
-        font-size: 0.95rem;
+        font-size: 0.85rem;
         letter-spacing: 3px;
         text-transform: uppercase;
-        margin-bottom: 2rem;
+        margin-bottom: 1.5rem;
     }
 
-    div[data-testid="stForm"], div[data-testid="stMetric"], .stDataFrame, div[data-testid="stExpander"] {
+    /* Formulaires et Conteneurs */
+    div[data-testid="stForm"], .stDataFrame {
         background: rgba(15, 23, 42, 0.65) !important;
         border: 1px solid rgba(0, 240, 255, 0.2) !important;
         border-radius: 12px !important;
@@ -56,6 +57,43 @@ st.markdown(
         backdrop-filter: blur(10px);
     }
 
+    /* Cartes KPI personnalisées */
+    .kpi-card {
+        background: rgba(15, 23, 42, 0.7) !important;
+        border: 1px solid rgba(0, 240, 255, 0.3) !important;
+        border-radius: 12px !important;
+        padding: 16px 20px !important;
+        text-align: center !important;
+        box-shadow: 0 0 15px rgba(0, 240, 255, 0.08) !important;
+        backdrop-filter: blur(10px);
+        transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    
+    .kpi-card:hover {
+        border-color: #a855f7 !important;
+        transform: translateY(-2px);
+    }
+
+    .kpi-label {
+        font-size: 0.85rem !important;
+        color: #94a3b8 !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 1px !important;
+        margin-bottom: 4px !important;
+    }
+
+    .kpi-value {
+        font-family: 'Rajdhani', sans-serif !important;
+        font-size: 2.4rem !important;
+        font-weight: 700 !important;
+        background: linear-gradient(90deg, #00f0ff 0%, #a855f7 100%) !important;
+        -webkit-background-clip: text !important;
+        -webkit-text-fill-color: transparent !important;
+        line-height: 1.1 !important;
+    }
+
+    /* Onglets */
     button[data-baseweb="tab"] {
         background-color: transparent !important;
         color: #94a3b8 !important;
@@ -72,33 +110,28 @@ st.markdown(
         box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
     }
 
+    /* Boutons Néo-brutalistes */
     .stButton > button, div[data-testid="stForm"] button {
         background: linear-gradient(90deg, #7c3aed 0%, #0284c7 100%) !important;
         color: #ffffff !important;
         border: none !important;
         border-radius: 8px !important;
         font-family: 'Rajdhani', sans-serif !important;
-        font-size: 1.1rem !important;
+        font-size: 1rem !important;
         font-weight: 700 !important;
-        box-shadow: 0 0 15px rgba(0, 240, 255, 0.2) !important;
-        transition: all 0.3s ease !important;
+        box-shadow: 0 0 12px rgba(0, 240, 255, 0.2) !important;
+        transition: all 0.2s ease !important;
     }
     
     .stButton > button:hover, div[data-testid="stForm"] button:hover {
-        box-shadow: 0 0 25px rgba(168, 85, 247, 0.8) !important;
-        transform: translateY(-2px);
+        box-shadow: 0 0 20px rgba(168, 85, 247, 0.8) !important;
+        transform: translateY(-1px);
     }
 
     a {
         color: #00f0ff !important;
         text-decoration: none !important;
         font-weight: 600;
-    }
-
-    div[data-testid="stMetricValue"] {
-        color: #00f0ff !important;
-        font-family: 'Rajdhani', sans-serif !important;
-        font-size: 2.2rem !important;
     }
     </style>
 """,
@@ -141,6 +174,22 @@ class UniversalCard(BaseModel):
   cardmarket_slug: str
 
 
+def update_sheet_data(dataframe):
+  sheet.clear()
+  sheet.update(
+      [dataframe.columns.values.tolist()] + dataframe.astype(str).values.tolist()
+  )
+
+
+def render_kpi(label: str, value: str, icon: str = ""):
+  return f"""
+    <div class="kpi-card">
+        <div class="kpi-label">{icon} {label}</div>
+        <div class="kpi-value">{value}</div>
+    </div>
+    """
+
+
 # ---------------------------------------------------------
 # 4. APPLICATION STREAMLIT
 # ---------------------------------------------------------
@@ -162,7 +211,7 @@ with tab1:
     image_input = st.camera_input("Prendre une photo de la carte")
 
   if image_input:
-    with st.spinner("Analyse visuelle en cours par l'IA..."):
+    with st.spinner("Analyse visuelle en cours par Gemini 3.6..."):
       pil_image = Image.open(image_input).convert("RGB")
 
       prompt = (
@@ -224,145 +273,112 @@ with tab1:
             f"✅ {quantite}x {card.card_name} ajouté(s) à la base de données !"
         )
 
-# --- ONGLET 2 : OUTIL DE GESTION DE STOCK ---
+# --- ONGLET 2 : INVENTAIRE ---
 with tab2:
   try:
     records = sheet.get_all_records()
 
     if records:
       df = pd.DataFrame(records)
-
       df["Quantité"] = (
           pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
       )
 
-      # Metrics
+      # --- KPI CARDS SUR-MESURE ---
       col_m1, col_m2, col_m3 = st.columns(3)
-      col_m1.metric("Références uniques", len(df))
-      col_m2.metric("Total exemplaires", int(df["Quantité"].sum()))
-      col_m3.metric("Jeux en stock", df["Jeu"].nunique() if "Jeu" in df else 0)
 
-      st.markdown("---")
-
-      # --- SECTION 1 : AJUSTEMENT RAPIDE ---
-      with st.expander(
-          "⚡ **Ajustement Rapide (Ajouter / Retirer / Supprimer)**",
-          expanded=True,
-      ):
-        df["label_select"] = (
-            df["Jeu"]
-            + " — "
-            + df["Nom"]
-            + " ("
-            + df["Numéro"]
-            + ") [Stock: "
-            + df["Quantité"].astype(str)
-            + "]"
+      with col_m1:
+        st.markdown(
+            render_kpi("Références uniques", str(len(df)), "🎴"),
+            unsafe_allow_html=True,
         )
-        selected_label = st.selectbox(
-            "Rechercher et sélectionner une carte à modifier :",
-            df["label_select"].tolist(),
+      with col_m2:
+        st.markdown(
+            render_kpi(
+                "Total exemplaires", str(int(df["Quantité"].sum())), "📦"
+            ),
+            unsafe_allow_html=True,
+        )
+      with col_m3:
+        st.markdown(
+            render_kpi(
+                "Jeux en stock",
+                str(df["Jeu"].nunique() if "Jeu" in df else 0),
+                "🎮",
+            ),
+            unsafe_allow_html=True,
         )
 
-        if selected_label:
-          selected_idx = df[df["label_select"] == selected_label].index[0]
-          current_qty = int(df.loc[selected_idx, "Quantité"])
-          card_title = df.loc[selected_idx, "Nom"]
+      st.markdown("<br>", unsafe_allow_html=True)
 
-          col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+      # --- BARRE DE RECHERCHE ET FILTRES ---
+      col_search, col_filter = st.columns([2, 1])
+      with col_search:
+        search_term = st.text_input(
+            "🔍 Rechercher une carte...",
+            placeholder="Nom de la carte, numéro...",
+        )
+      with col_filter:
+        jeux_dispos = ["Tous les jeux"] + sorted(df["Jeu"].unique().tolist())
+        selected_game = st.selectbox("🎮 Filtrer par jeu", jeux_dispos)
 
-          if col_b1.button("➕ Ajouter (+1)"):
-            df.loc[selected_idx, "Quantité"] += 1
-            df_to_save = df.drop(columns=["label_select"])
-            sheet.clear()
-            sheet.update(
-                [df_to_save.columns.values.tolist()]
-                + df_to_save.astype(str).values.tolist()
+      # Filtrage
+      filtered_df = df.copy()
+      if selected_game != "Tous les jeux":
+        filtered_df = filtered_df[filtered_df["Jeu"] == selected_game]
+      if search_term:
+        filtered_df = filtered_df[
+            filtered_df["Nom"].str.contains(search_term, case=False, na=False)
+            | filtered_df["Numéro"].str.contains(
+                search_term, case=False, na=False
             )
-            st.toast(f"+1 {card_title} (Nouveau stock : {current_qty + 1})")
-            st.rerun()
+        ]
 
-          if col_b2.button("➖ Retirer (-1)"):
-            if current_qty > 1:
-              df.loc[selected_idx, "Quantité"] -= 1
-              df_to_save = df.drop(columns=["label_select"])
-              sheet.clear()
-              sheet.update(
-                  [df_to_save.columns.values.tolist()]
-                  + df_to_save.astype(str).values.tolist()
-              )
-              st.toast(f"-1 {card_title} (Nouveau stock : {current_qty - 1})")
-            else:
-              df = df.drop(selected_idx)
-              df_to_save = df.drop(columns=["label_select"])
-              sheet.clear()
-              if not df_to_save.empty:
-                sheet.update(
-                    [df_to_save.columns.values.tolist()]
-                    + df_to_save.astype(str).values.tolist()
-                )
-              st.toast(f"🗑️ {card_title} retiré du stock (Quantité = 0)")
-            st.rerun()
+      st.markdown(f"**Cartes affichées ({len(filtered_df)})**")
 
-          if col_b3.button("🗑️ Supprimer l'entrée"):
-            df = df.drop(selected_idx)
-            df_to_save = df.drop(columns=["label_select"])
-            sheet.clear()
-            if not df_to_save.empty:
-              sheet.update(
-                  [df_to_save.columns.values.tolist()]
-                  + df_to_save.astype(str).values.tolist()
-              )
-            st.toast(f"🗑️ {card_title} supprimé de la base.")
-            st.rerun()
+      # --- CARTES D'INVENTAIRE ---
+      for idx, row in filtered_df.iterrows():
+        with st.container():
+          c_info, c_qty, c_actions, c_link = st.columns([4, 1.5, 2.5, 1.5])
 
-          if col_b4.button("🔄 Rafraîchir"):
-            st.rerun()
+          with c_info:
+            st.markdown(f"**{row['Nom']}** `{row['Numéro']}`")
+            st.caption(f"{row['Jeu']} • {row['Extension']}")
 
-      df = df.drop(columns=["label_select"])
+          with c_qty:
+            st.markdown(f"### {row['Quantité']} ex.")
 
-      # --- SECTION 2 : ÉDITEUR EN GRILLE DE MASSE ---
-      st.markdown("### ✏️ Éditeur de masse (Format Tableur)")
-      st.caption(
-          "Modifie directement la colonne **Quantité** ci-dessous, puis clique"
-          " sur **Sauvegarder**."
-      )
+          with c_actions:
+            b1, b2, b3 = st.columns(3)
+            if b1.button("➕", key=f"add_{idx}"):
+              df.loc[idx, "Quantité"] += 1
+              update_sheet_data(df)
+              st.rerun()
 
-      edited_df = st.data_editor(
-          df,
-          use_container_width=True,
-          num_rows="dynamic",
-          disabled=[
-              "Date",
-              "Jeu",
-              "Nom",
-              "Extension",
-              "Numéro",
-              "Lien Cardmarket",
-          ],
-          column_config={
-              "Lien Cardmarket": st.column_config.LinkColumn("Fiche Prix"),
-              "Date": st.column_config.TextColumn("Date d'ajout"),
-              "Quantité": st.column_config.NumberColumn(
-                  "Quantité", min_value=0, step=1, required=True
-              ),
-          },
-          hide_index=True,
-      )
+            if b2.button("➖", key=f"sub_{idx}"):
+              if df.loc[idx, "Quantité"] > 1:
+                df.loc[idx, "Quantité"] -= 1
+              else:
+                df = df.drop(idx)
+              update_sheet_data(df)
+              st.rerun()
 
-      if st.button("💾 Sauvegarder les modifications de la grille"):
-        edited_df["Quantité"] = pd.to_numeric(
-            edited_df["Quantité"], errors="coerce"
-        ).fillna(0)
-        final_df = edited_df[edited_df["Quantité"] > 0]
+            if b3.button("🗑️", key=f"del_{idx}"):
+              df = df.drop(idx)
+              update_sheet_data(df)
+              st.rerun()
 
-        sheet.clear()
-        sheet.update(
-            [final_df.columns.values.tolist()]
-            + final_df.astype(str).values.tolist()
-        )
-        st.success("✅ Stock mis à jour avec succès sur Google Sheets !")
-        st.rerun()
+          with c_link:
+            st.markdown(
+                f"<br><a href='{row['Lien Cardmarket']}' target='_blank'>↗"
+                " Prix</a>",
+                unsafe_allow_html=True,
+            )
+
+          st.markdown(
+              "<hr style='margin: 8px 0; opacity: 0.15;'>",
+              unsafe_allow_html=True,
+          )
 
     else:
       st.info(
@@ -370,4 +386,4 @@ with tab2:
       )
 
   except Exception as e:
-    st.error(f"Erreur d'accès à la base de données : {e}")
+    st.error(f"Erreur lors du chargement du stock : {e}")
