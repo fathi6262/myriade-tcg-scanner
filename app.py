@@ -1,3 +1,4 @@
+import io
 import re
 import urllib.parse
 from datetime import datetime
@@ -13,7 +14,7 @@ import streamlit as st
 # 1. CONFIGURATION DE LA PAGE & STYLES CSS (DA MYRIADE GAMES)
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Myriade Games — TCG Scanner", page_icon="🔮", layout="wide"
+    page_title="Myriade Games — TCG Master Stock", page_icon="🔮", layout="wide"
 )
 
 st.markdown(
@@ -74,7 +75,7 @@ st.markdown(
     }
 
     .kpi-label {
-        font-size: 0.85rem !important;
+        font-size: 0.8rem !important;
         color: #94a3b8 !important;
         font-weight: 600 !important;
         text-transform: uppercase !important;
@@ -84,7 +85,7 @@ st.markdown(
 
     .kpi-value {
         font-family: 'Rajdhani', sans-serif !important;
-        font-size: 2.4rem !important;
+        font-size: 2.2rem !important;
         font-weight: 700 !important;
         background: linear-gradient(90deg, #00f0ff 0%, #a855f7 100%) !important;
         -webkit-background-clip: text !important;
@@ -170,6 +171,9 @@ class UniversalCard(BaseModel):
   card_number: str
   cardmarket_slug: str
   cardmarket_search_term: str
+  language: str  # ex: FR, EN, JP
+  is_foil: str  # Normal, Holo/Foil, Reverse
+  estimated_price_eur: float  # Estimation indicative du prix du marché
 
 
 def update_sheet_data(dataframe):
@@ -190,100 +194,210 @@ def render_kpi(label: str, value: str, icon: str = ""):
 
 def build_cardmarket_url(slug: str, search_term: str) -> str:
   clean_slug = slug.strip().split("/")[0]
-  # Nettoyage des slashes, tirets et caractères spéciaux
   clean_term = re.sub(r"[\-\/,\.:#]", " ", search_term)
   clean_term = " ".join(clean_term.split())
   search_query = urllib.parse.quote(clean_term)
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
+def analyze_card_image(pil_image):
+  prompt = """
+    Identifie cette carte TCG avec haute précision.
+    - Dans 'cardmarket_slug', donne STRICTEMENT la catégorie principale Cardmarket en UN SEUL MOT (ex: Pokemon, Magic, YuGiOh, Lorcana, OnePiece, DragonBallSuper, Riftbound).
+    - Dans 'cardmarket_search_term', COMBINE le NOM DE LA CARTE et le NOM DE L'EXTENSION (ou son code). RETIRE TOUS les slashes (/), tirets (-), et numéros de collection sous forme de fraction.
+    - Dans 'language', indique la langue visible sur la carte (ex: FR, EN, JP, DE).
+    - Dans 'is_foil', indique 'Holo/Foil', 'Reverse' ou 'Normal'.
+    - Dans 'estimated_price_eur', donne une estimation numérique réaliste en euros (ex: 2.50).
+    """
+
+  response = client.models.generate_content(
+      model="gemini-3.6-flash",
+      contents=[pil_image, prompt],
+      config={
+          "response_mime_type": "application/json",
+          "response_schema": UniversalCard,
+      },
+  )
+  return response.parsed
+
+
 # ---------------------------------------------------------
 # 4. APPLICATION STREAMLIT
 # ---------------------------------------------------------
-tab1, tab2 = st.tabs(["📸 Scanner une carte", "📦 Gestion du Stock"])
+tab1, tab2 = st.tabs(["📸 Scanner & Importer", "📦 Gestion du Stock"])
 
-# --- ONGLET 1 : SCANNER ---
+# --- ONGLET 1 : SCANNER (SOLO ET BATCH) ---
 with tab1:
-  source_type = st.radio(
-      "Source de l'image :",
-      ["💻 Fichier (PC / Galerie)", "📷 Caméra"],
+  scan_mode = st.radio(
+      "Mode de traitement :",
+      ["🎴 Unité (Caméra / Fichier)", "⚡ Scan en Lot (Multiple)"],
       horizontal=True,
   )
 
-  if source_type == "💻 Fichier (PC / Galerie)":
-    image_input = st.file_uploader(
-        "Dépose l'image de la carte ici", type=["jpg", "jpeg", "png", "webp"]
+  # --- MODE UNITE ---
+  if scan_mode == "🎴 Unité (Caméra / Fichier)":
+    source_type = st.radio(
+        "Source d'image :",
+        ["💻 Fichier (PC / Galerie)", "📷 Caméra"],
+        horizontal=True,
     )
+
+    if source_type == "💻 Fichier (PC / Galerie)":
+      image_input = st.file_uploader(
+          "Dépose la photo de la carte", type=["jpg", "jpeg", "png", "webp"]
+      )
+    else:
+      image_input = st.camera_input("Prendre la carte en photo")
+
+    if image_input:
+      with st.spinner("Analyse par l'IA Gemini 3.6..."):
+        pil_image = Image.open(image_input).convert("RGB")
+        card = analyze_card_image(pil_image)
+
+      st.markdown("---")
+      st.subheader(f"🔮 {card.card_name}")
+
+      col1, col2, col3 = st.columns(3)
+      with col1:
+        st.markdown(f"**Jeu :** `{card.game_name}`")
+        st.markdown(f"**Extension :** {card.set_name}")
+      with col2:
+        st.markdown(f"**Numéro :** {card.card_number}")
+        st.markdown(f"**Langue :** {card.language}")
+      with col3:
+        st.markdown(f"**Finition :** {card.is_foil}")
+        st.markdown(f"**Cote est. :** ~{card.estimated_price_eur:.2f} €")
+
+      cardmarket_url = build_cardmarket_url(
+          card.cardmarket_slug, card.cardmarket_search_term
+      )
+      st.markdown(
+          f'<p style="margin-top: 5px;"><a href="{cardmarket_url}"'
+          ' target="_blank">↗ Voir sur Cardmarket</a></p>',
+          unsafe_allow_html=True,
+      )
+
+      # Formulaire avec état et emplacement
+      with st.form("single_add_form"):
+        c_qty, c_cond, c_loc = st.columns(3)
+        with c_qty:
+          quantite = st.number_input(
+              "Quantité", min_value=1, value=1, step=1
+          )
+        with c_cond:
+          condition = st.selectbox(
+              "État",
+              [
+                  "Near Mint (NM)",
+                  "Excellent (EX)",
+                  "Good (GD)",
+                  "Light Played (LP)",
+                  "Played (PL)",
+              ],
+          )
+        with c_loc:
+          emplacement = st.text_input(
+              "Emplacement physique", value="Classeur 1"
+          )
+
+        if st.form_submit_button("⚡ Ajouter au stock"):
+          date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+          sheet.append_row([
+              date_str,
+              card.game_name,
+              card.card_name,
+              card.set_name,
+              card.card_number,
+              card.is_foil,
+              card.language,
+              condition,
+              emplacement,
+              quantite,
+              card.estimated_price_eur,
+              cardmarket_url,
+          ])
+          st.success(f"✅ {card.card_name} enregistré avec succès !")
+
+  # --- MODE BATCH / MULTIPLE ---
   else:
-    image_input = st.camera_input("Prendre une photo de la carte")
-
-  if image_input:
-    with st.spinner("Analyse visuelle en cours par Gemini 3.6..."):
-      pil_image = Image.open(image_input).convert("RGB")
-
-      prompt = """
-      Identifie cette carte TCG.
-      - Dans 'cardmarket_slug', donne STRICTEMENT la catégorie principale Cardmarket en UN SEUL MOT (ex: Pokemon, Magic, YuGiOh, Lorcana, OnePiece, DragonBallSuper, Riftbound). NE METS JAMAIS de sous-dossier ou de slash.
-      - Dans 'cardmarket_search_term', COMBINE le NOM DE LA CARTE et le NOM DE L'EXTENSION (ou code d'extension).
-        RÈGLES STRICTES : RETIRE TOUS les slashes (/), les tirets (-) et les numéros de collection sous forme de fraction.
-        Exemple 1 : Carte "Dracaufeu", Extension "Set de Base", Numéro "4/102" -> "Dracaufeu Set de Base"
-        Exemple 2 : Carte "Ahri - Inquisitive", Extension "Riftbound" -> "Ahri Inquisitive Riftbound"
-        Exemple 3 : Carte "Charizard ex", Extension "151", Numéro "199/165" -> "Charizard ex 151"
-      """
-
-      response = client.models.generate_content(
-          model="gemini-3.6-flash",
-          contents=[pil_image, prompt],
-          config={
-              "response_mime_type": "application/json",
-              "response_schema": UniversalCard,
-          },
-      )
-      card = response.parsed
-
-    st.markdown("---")
-    st.subheader(f"🔮 {card.card_name}")
-
-    col1, col2 = st.columns(2)
-    with col1:
-      st.markdown(f"**Jeu :** `{card.game_name}`")
-      st.markdown(f"**Extension :** {card.set_name}")
-    with col2:
-      st.markdown(f"**Numéro :** {card.card_number}")
-
-    cardmarket_url = build_cardmarket_url(
-        card.cardmarket_slug, card.cardmarket_search_term
+    uploaded_files = st.file_uploader(
+        "Importe plusieurs images de cartes en même temps",
+        type=["jpg", "jpeg", "png", "webp"],
+        accept_multiple_files=True,
     )
 
-    st.markdown(
-        f'<p style="margin-top: 10px;"><a href="{cardmarket_url}"'
-        ' target="_blank">↗ Consulter la cote en direct sur'
-        " Cardmarket</a></p>",
-        unsafe_allow_html=True,
-    )
-
-    with st.form("add_to_stock_form"):
-      quantite = st.number_input(
-          "Quantité à ajouter au stock", min_value=1, value=1, step=1
-      )
-      submit_button = st.form_submit_button("⚡ Enregistrer dans l'inventaire")
-
-      if submit_button:
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        sheet.append_row([
-            date_str,
-            card.game_name,
-            card.card_name,
-            card.set_name,
-            card.card_number,
-            quantite,
-            cardmarket_url,
-        ])
-        st.success(
-            f"✅ {quantite}x {card.card_name} ajouté(s) à la base de données !"
+    if uploaded_files:
+      c_batch_loc, c_batch_cond = st.columns(2)
+      with c_batch_loc:
+        batch_loc = st.text_input(
+            "Emplacement commun pour ce lot :", value="Boîte Arrivage"
+        )
+      with c_batch_cond:
+        batch_cond = st.selectbox(
+            "État commun :",
+            [
+                "Near Mint (NM)",
+                "Excellent (EX)",
+                "Good (GD)",
+                "Light Played (LP)",
+            ],
         )
 
-# --- ONGLET 2 : INVENTAIRE ---
+      if st.button(f"⚡ Analyser les {len(uploaded_files)} images"):
+        progress_bar = st.progress(0)
+        analyzed_cards = []
+
+        for idx, file in enumerate(uploaded_files):
+          pil_img = Image.open(file).convert("RGB")
+          parsed_card = analyze_card_image(pil_img)
+          analyzed_cards.append(parsed_card)
+          progress_bar.progress((idx + 1) / len(uploaded_files))
+
+        st.session_state["batch_results"] = analyzed_cards
+        st.success("Analyse terminée ! Vérifie le lot ci-dessous :")
+
+    if "batch_results" in st.session_state and st.session_state["batch_results"]:
+      st.markdown("### 📋 Récapitulatif du lot")
+
+      batch_data = []
+      for c in st.session_state["batch_results"]:
+        url = build_cardmarket_url(c.cardmarket_slug, c.cardmarket_search_term)
+        batch_data.append({
+            "Jeu": c.game_name,
+            "Nom": c.card_name,
+            "Extension": c.set_name,
+            "Numéro": c.card_number,
+            "Finition": c.is_foil,
+            "Langue": c.language,
+            "Prix Est. (€)": c.estimated_price_eur,
+            "URL": url,
+        })
+
+      batch_df = pd.DataFrame(batch_data)
+      st.dataframe(batch_df, use_container_width=True)
+
+      if st.button("💾 Tout sauvegarder dans Google Sheets"):
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        for item in batch_data:
+          sheet.append_row([
+              date_str,
+              item["Jeu"],
+              item["Nom"],
+              item["Extension"],
+              item["Numéro"],
+              item["Finition"],
+              item["Langue"],
+              batch_cond,
+              batch_loc,
+              1,
+              item["Prix Est. (€)"],
+              item["URL"],
+          ])
+        st.success("✅ Toutes les cartes ont été ajoutées au stock !")
+        del st.session_state["batch_results"]
+        st.rerun()
+
+# --- ONGLET 2 : INVENTAIRE ET GESTION COMPLÈTE ---
 with tab2:
   try:
     records = sheet.get_all_records()
@@ -293,26 +407,35 @@ with tab2:
       df["Quantité"] = (
           pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
       )
+      df["Prix Est. (€)"] = pd.to_numeric(
+          df["Prix Est. (€)"], errors="coerce"
+      ).fillna(0.0)
+      df["Valeur Totale (€)"] = df["Quantité"] * df["Prix Est. (€)"]
 
-      # --- KPI CARDS SUR-MESURE ---
-      col_m1, col_m2, col_m3 = st.columns(3)
-
+      # --- KPI AVANCÉS ---
+      col_m1, col_m2, col_m3, col_m4 = st.columns(4)
       with col_m1:
         st.markdown(
-            render_kpi("Références uniques", str(len(df)), "🎴"),
-            unsafe_allow_html=True,
+            render_kpi("Références", str(len(df)), "🎴"), unsafe_allow_html=True
         )
       with col_m2:
         st.markdown(
             render_kpi(
-                "Total exemplaires", str(int(df["Quantité"].sum())), "📦"
+                "Total Exemplaires", str(int(df["Quantité"].sum())), "📦"
             ),
             unsafe_allow_html=True,
         )
       with col_m3:
         st.markdown(
             render_kpi(
-                "Jeux en stock",
+                "Valeur Estimée", f"{df['Valeur Totale (€)'].sum():.2f} €", "💎"
+            ),
+            unsafe_allow_html=True,
+        )
+      with col_m4:
+        st.markdown(
+            render_kpi(
+                "Jeux en Stock",
                 str(df["Jeu"].nunique() if "Jeu" in df else 0),
                 "🎮",
             ),
@@ -321,18 +444,28 @@ with tab2:
 
       st.markdown("<br>", unsafe_allow_html=True)
 
-      # --- BARRE DE RECHERCHE ET FILTRES ---
-      col_search, col_filter = st.columns([2, 1])
-      with col_search:
+      # --- BARRE DE RECHERCHE, FILTRES ET EXPORT ---
+      c_src, c_flt, c_exp = st.columns([2, 1, 1])
+      with c_src:
         search_term = st.text_input(
-            "🔍 Rechercher une carte...",
-            placeholder="Nom de la carte, numéro...",
+            "🔍 Recherche...", placeholder="Nom, numéro, emplacement..."
         )
-      with col_filter:
+      with c_flt:
         jeux_dispos = ["Tous les jeux"] + sorted(df["Jeu"].unique().tolist())
         selected_game = st.selectbox("🎮 Filtrer par jeu", jeux_dispos)
+      with c_exp:
+        st.markdown("<br>", unsafe_allow_html=True)
+        # Génération du fichier CSV téléchargeable
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="📥 Exporter (CSV)",
+            data=csv_buffer.getvalue(),
+            file_name=f"Stock_Myriade_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+        )
 
-      # Filtrage
+      # Filtrage dynamique
       filtered_df = df.copy()
       if selected_game != "Tous les jeux":
         filtered_df = filtered_df[filtered_df["Jeu"] == selected_game]
@@ -342,18 +475,33 @@ with tab2:
             | filtered_df["Numéro"].str.contains(
                 search_term, case=False, na=False
             )
+            | filtered_df["Emplacement"].str.contains(
+                search_term, case=False, na=False
+            )
         ]
 
       st.markdown(f"**Cartes affichées ({len(filtered_df)})**")
 
-      # --- CARTES D'INVENTAIRE INTERACTIVES ---
+      # --- CARTES D'INVENTAIRE COMPLÈTES ---
       for idx, row in filtered_df.iterrows():
         with st.container():
-          c_info, c_qty, c_actions, c_link = st.columns([4, 1.5, 2.5, 1.5])
+          c_info, c_details, c_qty, c_actions, c_link = st.columns(
+              [3.5, 2.5, 1.2, 2, 1]
+          )
 
           with c_info:
             st.markdown(f"**{row['Nom']}** `{row['Numéro']}`")
             st.caption(f"{row['Jeu']} • {row['Extension']}")
+
+          with c_details:
+            st.markdown(
+                f"📍 `{row.get('Emplacement', 'N/A')}` |"
+                f" `{row.get('État', 'NM')}`"
+            )
+            st.caption(
+                f"{row.get('Finition', 'Normal')} • {row.get('Langue', 'FR')} •"
+                f" ~{row.get('Prix Est. (€)', 0):.2f} €"
+            )
 
           with c_qty:
             st.markdown(f"### {row['Quantité']} ex.")
@@ -362,7 +510,7 @@ with tab2:
             b1, b2, b3 = st.columns(3)
             if b1.button("➕", key=f"add_{idx}"):
               df.loc[idx, "Quantité"] += 1
-              update_sheet_data(df)
+              update_sheet_data(df.drop(columns=["Valeur Totale (€)"]))
               st.rerun()
 
             if b2.button("➖", key=f"sub_{idx}"):
@@ -370,12 +518,12 @@ with tab2:
                 df.loc[idx, "Quantité"] -= 1
               else:
                 df = df.drop(idx)
-              update_sheet_data(df)
+              update_sheet_data(df.drop(columns=["Valeur Totale (€)"]))
               st.rerun()
 
             if b3.button("🗑️", key=f"del_{idx}"):
               df = df.drop(idx)
-              update_sheet_data(df)
+              update_sheet_data(df.drop(columns=["Valeur Totale (€)"]))
               st.rerun()
 
           with c_link:
