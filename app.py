@@ -192,7 +192,7 @@ def render_kpi(label: str, value: str, icon: str = ""):
     """
 
 
-def resize_image_for_api(pil_image: Image.Image, max_dimension: int = 1024) -> Image.Image:
+def resize_image_for_api(pil_image: Image.Image, max_dimension: int = 1280) -> Image.Image:
   """Redimensionne l'image pour limiter le coût en tokens côté API (le nombre
   de tokens d'une image dépend de sa résolution)."""
   width, height = pil_image.size
@@ -228,6 +228,11 @@ def analyze_card_image_groq_cached(image_bytes):
       "cardmarket_search_term": "Nom carte et extension",
       "language": "FR"
     }
+
+    Attention particulière pour "card_number" : ce champ contient deux nombres
+    séparés par "/" (ex: 227/221) et ils ne sont PAS toujours identiques.
+    Lis chaque chiffre individuellement, un par un, avant et après le "/",
+    sans supposer qu'ils sont égaux. Vérifie ta lecture avant de répondre.
     """
 
   chat_completion = groq_client.chat.completions.create(
@@ -315,7 +320,7 @@ with tab1:
       pil_image = Image.open(image_input).convert("RGB")
       pil_image = resize_image_for_api(pil_image)
       img_byte_arr = io.BytesIO()
-      pil_image.save(img_byte_arr, format="JPEG", quality=85)
+      pil_image.save(img_byte_arr, format="JPEG", quality=92)
       image_bytes = img_byte_arr.getvalue()
 
       try:
@@ -410,7 +415,7 @@ with tab1:
           pil_img = Image.open(file).convert("RGB")
           pil_img = resize_image_for_api(pil_img)
           img_byte_arr = io.BytesIO()
-          pil_img.save(img_byte_arr, format="JPEG", quality=85)
+          pil_img.save(img_byte_arr, format="JPEG", quality=92)
 
           try:
             parsed_card = analyze_card_image_groq_cached(
