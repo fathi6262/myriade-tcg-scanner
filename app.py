@@ -193,9 +193,10 @@ def render_kpi(label: str, value: str, icon: str = ""):
     """
 
 
-def resize_image_for_api(pil_image: Image.Image, max_dimension: int = 1280) -> Image.Image:
-  """Redimensionne l'image pour limiter le coût en tokens côté API (le nombre
-  de tokens d'une image dépend de sa résolution)."""
+def resize_image_for_api(
+    pil_image: Image.Image, max_dimension: int = 1600
+) -> Image.Image:
+  """Augmentation à 1600px pour préserver la lisibilité des textes minuscules en bas de carte."""
   width, height = pil_image.size
   if max(width, height) <= max_dimension:
     return pil_image
@@ -217,48 +218,36 @@ def analyze_card_image_groq_cached(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
-    Identifie cette carte TCG et génère un objet JSON structuré avec ces clés exactes :
+    Exécute une analyse OCR visuelle ultra-précise de cette carte TCG.
+
+    DIRECTIVES D'ANALYSE ZONE PAR ZONE :
+    1. EN HAUT DE LA CARTE :
+       - "play_cost" : Repère le coût en mana/ressource/énergie (chiffre souvent dans un cercle/gemme en haut à gauche ou à droite).
+       - "card_name" : Transcris le titre exact au centre supérieur (ex: "Ahri", "Dracaufeu ex", "Pikachu").
+    2. EN BAS DE LA CARTE (TEXTE MINUSCULE - ZONE CRITIQUE) :
+       - "printed_code_line" : Recopie INTÉGRALEMENT la ligne de code en bas de carte (ex: "SFO • 227/227", "OP01-120 SEC", "SV03 199/165").
+       - "set_name" : Le code d'extension littéral imprimé (ex: "SFO", "OP01", "SV03"). N'invente jamais un nom narratif s'il n'est pas écrit.
+       - "card_number" : Le numéro EXACT. S'il est sous forme de fraction "XXX/YYY" (ex: "227/227"), CONSERVE OBLIGATOIREMENT le dénominateur ("/227"). Ne le tronque jamais à un simple chiffre.
+       - "rarity" : La rareté (Commune, Peu Commune, Rare, Super Rare, Secrète Rare, Champion, etc.).
+    3. MÉTADONNÉES DU JEU :
+       - "game_name" : Le nom du jeu (ex: "Pokémon", "Magic", "Lorcana", "One Piece Card Game", "Riftbound", "Yu-Gi-Oh!").
+       - "cardmarket_slug" : Nom du jeu en 1 seul mot pour l'URL Cardmarket (ex: "Pokemon", "Magic", "Lorcana", "OnePiece").
+       - "cardmarket_search_term" : Combinaison Nom de carte + Extension.
+       - "language" : Langue du texte principal ("FR", "EN", "JP", "DE").
+
+    Génère STRICTEMENT cet objet JSON :
     {
-      "printed_code_line": "Le petit code imprimé sur la carte, transcrit tel quel",
-      "game_name": "Nom du jeu",
-      "card_name": "Nom de la carte",
-      "set_name": "Code d'extension (best-effort, vérifié ensuite via le web)",
-      "card_number": "Numéro tel qu'imprimé (best-effort, vérifié ensuite via le web)",
-      "rarity": "Rareté (best-effort, vérifiée ensuite via le web)",
-      "play_cost": "Coût de la carte",
-      "cardmarket_slug": "Nom du jeu en un mot",
-      "cardmarket_search_term": "Nom carte et extension",
+      "printed_code_line": "",
+      "game_name": "",
+      "card_name": "",
+      "set_name": "",
+      "card_number": "",
+      "rarity": "",
+      "play_cost": "",
+      "cardmarket_slug": "",
+      "cardmarket_search_term": "",
       "language": "FR"
     }
-
-    MÉTHODE OBLIGATOIRE : la plupart des TCG impriment un petit code compact
-    dans un coin de la carte (souvent en bas), qui regroupe ensemble le code
-    d'extension, le numéro de carte et l'abréviation de rareté (par exemple :
-    "OP01-120 SEC" pour One Piece Card Game, ou "SWSH045" pour Pokémon, ou
-    "227/221 R" pour d'autres jeux). Repère cette ligne en premier, transcris-
-    la EXACTEMENT dans "printed_code_line", puis déduis les champs suivants
-    à partir de cette transcription plutôt que de les inventer séparément :
-
-    - "set_name" : le CODE d'extension tel qu'imprimé (ex: "OP01", "ST01",
-      "SWSH045"). N'invente JAMAIS un nom thématique ou narratif (ex: "The
-      Four Emperors", "Romance Dawn") si ce n'est pas littéralement le texte
-      imprimé sur la carte — utilise uniquement le code visible.
-    - "card_number" : recopie le numéro EXACTEMENT tel qu'il est imprimé.
-      Tous les jeux n'utilisent PAS un format "X/Y" : certains n'impriment
-      qu'un seul nombre (ex: One Piece Card Game). Si un seul nombre est
-      imprimé, ne le duplique pas et n'invente pas de second nombre après
-      un "/" — laisse le champ tel quel (ex: "120", pas "120/120").
-    - "rarity" : de nombreux jeux impriment une abréviation de rareté à côté
-      du numéro (ex pour One Piece Card Game : L=Leader, C=Commune,
-      UC=Peu Commune, R=Rare, SR=Super Rare, SEC=Secrète, P=Promo). Si tu
-      repères cette abréviation, développe-la en toutes lettres. Ne
-      remplace jamais une abréviation clairement visible par une estimation
-      basée sur la couleur d'un symbole.
-
-    Si aucun code compact n'est visible ou lisible, laisse
-    "printed_code_line" vide et fais de ton mieux pour chaque champ
-    individuellement, en restant fidèle à ce qui est réellement imprimé
-    plutôt qu'à ce qui te semblerait plausible.
     """
 
   chat_completion = groq_client.chat.completions.create(
@@ -266,8 +255,10 @@ def analyze_card_image_groq_cached(image_bytes):
           {
               "role": "system",
               "content": (
-                  "Tu es un processeur d'images TCG. Génère directement le JSON"
-                  " en fin de réponse."
+                  "Tu es un moteur OCR expert en cartes à jouer (TCG). Tu"
+                  " lis les textes minuscules avec précision et réponds"
+                  " EXCLUSIVEMENT avec un objet JSON valide sans aucune"
+                  " balise <think>."
               ),
           },
           {
@@ -284,20 +275,18 @@ def analyze_card_image_groq_cached(image_bytes):
           },
       ],
       model="qwen/qwen3.6-27b",
-      max_tokens=1024,  # suffisant pour un JSON court, raisonnement désactivé
+      max_tokens=1024,
       temperature=0.0,
-      reasoning_format="hidden",  # ne renvoie que la réponse finale, pas le <think>
-      reasoning_effort="none",    # désactive le raisonnement, inutile pour cette tâche d'extraction
+      reasoning_format="hidden",
+      reasoning_effort="none",
   )
 
   raw_text = chat_completion.choices[0].message.content
 
-  # Nettoyage de la réponse (gardé en filet de sécurité)
   clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
   clean_text = re.sub(r"```json\s*", "", clean_text)
   clean_text = re.sub(r"```\s*", "", clean_text).strip()
 
-  # Extraction de l'objet JSON
   json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
   if json_match:
     try:
@@ -317,16 +306,6 @@ def analyze_card_image_groq_cached(image_bytes):
 
 @st.cache_data(show_spinner=False)
 def fetch_card_details_from_justtcg(game_name: str, card_name: str):
-  """Interroge la base de données structurée JustTCG (api.justtcg.com) pour
-  retrouver l'extension et la rareté officielles d'une carte. Contrairement
-  à une recherche web interprétée par un LLM, il s'agit d'une base de
-  données indexée — plus fiable, quand la carte y figure. Nécessite une clé
-  st.secrets["JUSTTCG_API_KEY"] (compte gratuit sur justtcg.com ; le palier
-  gratuit est réservé à un usage non commercial, un plan payant est
-  nécessaire pour un usage en boutique). Ne renvoie PAS card_number : ce
-  champ n'est pas garanti par leur schéma de réponse documenté. Retourne un
-  dict vide si aucune clé n'est configurée, si rien n'est trouvé, ou en cas
-  d'erreur — repli silencieux vers l'étape suivante."""
   api_key = st.secrets.get("JUSTTCG_API_KEY")
   if not api_key or not card_name:
     return {}
@@ -346,8 +325,6 @@ def fetch_card_details_from_justtcg(game_name: str, card_name: str):
   if not results:
     return {}
 
-  # On privilégie une correspondance exacte du nom pour éviter de prendre
-  # par erreur une carte homonyme d'une autre extension
   card_name_lower = card_name.strip().lower()
   best_match = next(
       (
@@ -375,43 +352,25 @@ def fetch_precise_card_details_from_web(
     rough_number_hint: str = "",
     printed_code_line: str = "",
 ):
-  """Utilise Groq Compound (recherche web intégrée, propulsée par Tavily)
-  pour retrouver l'extension, le numéro et la rareté officiels d'une carte,
-  en appliquant les conventions propres au jeu identifié plutôt que des
-  règles codées en dur pour chaque TCG. Les valeurs issues du scan visuel
-  ne sont transmises que comme indices à vérifier, pas comme vérités.
-  Retourne un dict partiel (clés absentes si non trouvées avec confiance) ;
-  ne lève jamais d'exception — un échec renvoie {} et l'appelant garde les
-  valeurs du scan visuel."""
   hints = []
   if rough_set_hint:
-    hints.append(f"extension possible d'après le scan : « {rough_set_hint} »")
+    hints.append(f"extension imprimée : « {rough_set_hint} »")
   if rough_number_hint:
-    hints.append(f"numéro possible d'après le scan : « {rough_number_hint} »")
+    hints.append(f"numéro imprimé : « {rough_number_hint} »")
   if printed_code_line:
-    hints.append(f"code compact repéré sur la carte : « {printed_code_line} »")
+    hints.append(f"code complet bas de carte : « {printed_code_line} »")
   hints_text = (
-      " Indices du scan visuel, à vérifier et corriger si besoin (ils"
-      f" peuvent être faux) : {' ; '.join(hints)}."
-      if hints
-      else ""
+      f" Indices issus de l'OCR visuel : {' ; '.join(hints)}." if hints else ""
   )
 
   query = (
-      "Recherche sur le web les informations officielles précises de cette"
-      f" carte à jouer : jeu « {game_name} », carte « {card_name} »."
-      f"{hints_text} Chaque TCG a ses propres conventions pour le format du"
-      " numéro de carte et pour le système de rareté (les libellés, les"
-      " abréviations, la présence ou non d'un total après un « / ») : ne"
-      " suppose rien, applique les conventions réelles du jeu identifié"
-      " ci-dessus telles que tu les trouves sur le web.\n\n"
-      "Réponds UNIQUEMENT avec un objet JSON strict, sans aucun texte"
-      " avant ou après, au format exact :\n"
-      '{"set_name": "code ou nom d\'extension officiel",'
-      ' "card_number": "numéro exact, écrit selon la convention du jeu",'
-      ' "rarity": "nom complet de la rareté, en français"}\n\n'
-      "Si une information reste introuvable malgré la recherche, mets une"
-      ' chaîne vide "" pour ce champ plutôt que de deviner.'
+      "Recherche les données officielles exactes de cette carte TCG :"
+      f" Jeu « {game_name} », Carte « {card_name} ».{hints_text}\n\n"
+      "Consigne sur le numéro : si le numéro d'origine comporte une fraction"
+      " (ex: 227/227), tu DOIS renvoyer la fraction complète.\n"
+      "Réponds UNIQUEMENT avec un objet JSON strict au format :\n"
+      '{"set_name": "nom ou code officiel", "card_number": "numéro complet",'
+      ' "rarity": "rareté en français"}'
   )
 
   try:
@@ -426,10 +385,8 @@ def fetch_precise_card_details_from_web(
     if not json_match:
       return {}
     result = json.loads(json_match.group())
-    # On ne garde que les champs non vides renvoyés par la recherche
     return {k: v for k, v in result.items() if isinstance(v, str) and v.strip()}
   except Exception:
-    # Recherche web best-effort : en cas d'échec on garde les valeurs du scan visuel
     return {}
 
 
@@ -464,19 +421,19 @@ with tab1:
       pil_image = Image.open(image_input).convert("RGB")
       pil_image = resize_image_for_api(pil_image)
       img_byte_arr = io.BytesIO()
-      pil_image.save(img_byte_arr, format="JPEG", quality=92)
+      pil_image.save(img_byte_arr, format="JPEG", quality=95)
       image_bytes = img_byte_arr.getvalue()
 
       try:
-        with st.spinner("Analyse visuelle par Groq..."):
+        with st.spinner("Analyse visuelle haute précision par Groq..."):
           card = analyze_card_image_groq_cached(image_bytes)
 
-        with st.spinner("Vérification de l'extension et de la rareté (base de données)..."):
+        with st.spinner("Vérification dans la base de données TCG..."):
           justtcg_fields = fetch_card_details_from_justtcg(
               card.get("game_name", ""), card.get("card_name", "")
           )
 
-        with st.spinner("Vérification complémentaire sur le web..."):
+        with st.spinner("Validation complémentaire..."):
           web_fields = fetch_precise_card_details_from_web(
               card.get("game_name", ""),
               card.get("card_name", ""),
@@ -484,9 +441,16 @@ with tab1:
               card.get("card_number", ""),
               card.get("printed_code_line", ""),
           )
-          # JustTCG (base structurée) est prioritaire quand il a une réponse ;
-          # le web comble le reste, notamment card_number (non garanti par JustTCG)
+
+          # Fusion sécurisée : Si l'OCR visuel a trouvé une fraction (ex: 227/227),
+          # on ne laisse pas la recherche web la remplacer par un nombre simple tronqué.
+          vision_number = card.get("card_number", "")
+          web_number = web_fields.get("card_number", "")
+
           card.update({**web_fields, **justtcg_fields})
+
+          if "/" in vision_number and "/" not in web_number:
+            card["card_number"] = vision_number
 
         st.markdown("---")
         st.subheader("✏️ Vérifier et corriger les informations scannées")
@@ -576,23 +540,33 @@ with tab1:
           pil_img = Image.open(file).convert("RGB")
           pil_img = resize_image_for_api(pil_img)
           img_byte_arr = io.BytesIO()
-          pil_img.save(img_byte_arr, format="JPEG", quality=92)
+          pil_img.save(img_byte_arr, format="JPEG", quality=95)
 
           try:
             parsed_card = analyze_card_image_groq_cached(
                 img_byte_arr.getvalue()
             )
             justtcg_fields = fetch_card_details_from_justtcg(
-                parsed_card.get("game_name", ""), parsed_card.get("card_name", "")
+                parsed_card.get("game_name", ""),
+                parsed_card.get("card_name", ""),
             )
             web_fields = fetch_precise_card_details_from_web(
                 parsed_card.get("game_name", ""),
                 parsed_card.get("card_name", ""),
-                justtcg_fields.get("set_name", parsed_card.get("set_name", "")),
+                justtcg_fields.get(
+                    "set_name", parsed_card.get("set_name", "")
+                ),
                 parsed_card.get("card_number", ""),
                 parsed_card.get("printed_code_line", ""),
             )
+
+            vision_number = parsed_card.get("card_number", "")
+            web_number = web_fields.get("card_number", "")
+
             parsed_card.update({**web_fields, **justtcg_fields})
+            if "/" in vision_number and "/" not in web_number:
+              parsed_card["card_number"] = vision_number
+
             analyzed_cards.append(parsed_card)
           except Exception as e:
             st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
