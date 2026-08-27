@@ -6,7 +6,7 @@ import re
 import urllib.parse
 
 from google.oauth2.service_account import Credentials
-from groq import Groq
+import google.generativeai as genai
 import gspread
 import pandas as pd
 from PIL import Image
@@ -155,8 +155,9 @@ SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 
 
 @st.cache_resource
-def get_groq_client():
-  return Groq(api_key=st.secrets["GROQ_API_KEY"].strip())
+def get_gemini_model():
+  genai.configure(api_key=st.secrets["GEMINI_API_KEY"].strip())
+  return genai.GenerativeModel("gemini-1.5-flash")
 
 
 @st.cache_resource
@@ -169,12 +170,12 @@ def get_google_sheet():
   return gc.open_by_key(SPREADSHEET_ID).sheet1
 
 
-groq_client = get_groq_client()
+gemini_model = get_gemini_model()
 sheet = get_google_sheet()
 
 
 # ---------------------------------------------------------
-# 3. FONCTIONS UTILITAIRES ET ANALYSE UNIQUE
+# 3. FONCTIONS UTILITAIRES ET ANALYSE GEMINI
 # ---------------------------------------------------------
 def update_sheet_data(dataframe):
   sheet.clear()
@@ -192,17 +193,6 @@ def render_kpi(label: str, value: str, icon: str = ""):
     """
 
 
-def resize_image_for_api(
-    pil_image: Image.Image, max_dimension: int = 1400
-) -> Image.Image:
-  width, height = pil_image.size
-  if max(width, height) <= max_dimension:
-    return pil_image
-  scale = max_dimension / max(width, height)
-  new_size = (int(width * scale), int(height * scale))
-  return pil_image.resize(new_size, Image.LANCZOS)
-
-
 def build_cardmarket_url(slug: str, search_term: str) -> str:
   clean_slug = slug.strip().split("/")[0] if slug else "Pokemon"
   clean_term = re.sub(r"[\-\/,\.:#]", " ", search_term)
@@ -211,82 +201,35 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
-# ANALYSE PAR PASSAGE UNIQUE (VISION + CONNAISSANCES INTERNES)
 @st.cache_data(show_spinner=False)
-def analyze_card_expert_vision(image_bytes):
-  base64_image = base64.b64encode(image_bytes).decode("utf-8")
+def analyze_card_gemini_cached(image_bytes):
+  pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
   prompt = """
-    Analyse cette carte TCG et extrait ses données exactes en combinant ce que tu vois sur l'image et tes connaissances TCG :
+    Tu es un expert mondial en identification de cartes TCG (Trading Card Games).
+    Analyse cette photo de carte et extrait avec une précision exacte ses données officielles :
 
-    1. "game_name" : Nom exact du jeu (ex: "One Piece Card Game", "Pokémon", "Magic: The Gathering", "Disney Lorcana", "Riftbound").
-    2. "card_name" : Nom de la carte. Si la carte est en japonais ou autre langue, indique TOUJOURS le nom anglais officiel suivi du nom original (ex: "Monkey D. Luffy / モンキー・D・ルフィ").
-    3. "set_name" : Nom ou code d'extension officiel complet. Si c'est une carte promo, indique le nom de la promo (ex: "ONE PIECE magazine Vol.20 Promo" ou "STARTER DECK EX -GEAR5- [ST-21]").
-    4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "OP01-120"). Ne trompe pas les "0" avec des "O".
-    5. "rarity" : Rareté officielle exacte (ex: "Super Rare (SR)", "Rare (R)", "Secret Rare (SEC)", "Commune (C)", "Promo"). Ne confonds JAMAIS les mots de règles (comme "DON!!") avec une rareté.
-    6. "play_cost" : Coût en mana/ressource/énergie (ex: 5).
+    1. "game_name" : Nom officiel du jeu (ex: "One Piece Card Game", "Riftbound", "Pokémon", "Magic: The Gathering", "Disney Lorcana", "Yu-Gi-Oh!").
+    2. "card_name" : Nom de la carte. Si la carte est en japonais, donne le nom anglais/romaji officiel suivi du nom japonais entre parenthèses ou slashes (ex: "Monkey D. Luffy / モンキー・D・ルフィ").
+    3. "set_name" : Nom ou code d'extension officiel (ex: "STARTER DECK EX -GEAR5- [ST-21]", "Vendetta", "ONE PIECE magazine Vol.20 Promo", "151").
+    4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227", "OP01-120"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
+    5. "rarity" : Rareté officielle (ex: "Super Rare (SR)", "Rare (R)", "Épique", "Secret Rare (SEC)", "Commune (C)"). Attention : "DON!!" est le nom de la ressource, JAMAIS une rareté.
+    6. "play_cost" : Le coût en mana/ressource/énergie (ex: 5, 1, 10).
     7. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
-    8. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en un mot (ex: "OnePiece", "Pokemon", "Magic", "Lorcana").
-    9. "cardmarket_search_term" : Terme de recherche optimisé pour Cardmarket (Nom anglais + Référence, ex: "Monkey D. Luffy ST21-014").
+    8. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot (ex: "OnePiece", "Riftbound", "Pokemon", "Magic", "Lorcana").
+    9. "cardmarket_search_term" : Termes exacts pour chercher la carte sur Cardmarket (Nom anglais + Référence, ex: "Monkey D. Luffy ST21-014").
 
-    Génère STRICTEMENT cet objet JSON :
-    {
-      "game_name": "",
-      "card_name": "",
-      "set_name": "",
-      "card_number": "",
-      "rarity": "",
-      "play_cost": "",
-      "language": "EN",
-      "cardmarket_slug": "",
-      "cardmarket_search_term": ""
-    }
+    Génère STRICTEMENT un objet JSON valide.
     """
 
-  chat_completion = groq_client.chat.completions.create(
-      messages=[
-          {
-              "role": "system",
-              "content": (
-                  "Tu es un expert mondial en identification de cartes TCG."
-                  " Tu lis les photos de cartes parfaitement et tu réponds"
-                  " EXCLUSIVEMENT avec un objet JSON valide, sans aucune balise"
-                  " <think>."
-              ),
-          },
-          {
-              "role": "user",
-              "content": [
-                  {"type": "text", "text": prompt},
-                  {
-                      "type": "image_url",
-                      "image_url": {
-                          "url": f"data:image/jpeg;base64,{base64_image}"
-                      },
-                  },
-              ],
-          },
-      ],
-      model="qwen/qwen3.6-27b",
-      max_tokens=700,
-      temperature=0.0,
-      reasoning_format="hidden",
-      reasoning_effort="none",
+  response = gemini_model.generate_content(
+      [pil_image, prompt],
+      generation_config=genai.GenerationConfig(
+          response_mime_type="application/json", temperature=0.0
+      ),
   )
 
-  raw_text = chat_completion.choices[0].message.content
-  clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
-  clean_text = re.sub(r"```json\s*", "", clean_text)
-  clean_text = re.sub(r"```\s*", "", clean_text).strip()
-
-  json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
-  if json_match:
-    try:
-      return json.loads(json_match.group())
-    except json.JSONDecodeError:
-      pass
-
-  raise ValueError(f"Analyse visuelle impossible : {raw_text[:200]}")
+  return json.loads(response.text)
 
 
 # ---------------------------------------------------------
@@ -317,15 +260,13 @@ with tab1:
       image_input = st.camera_input("Prendre la carte en photo")
 
     if image_input:
-      pil_image = Image.open(image_input).convert("RGB")
-      pil_image = resize_image_for_api(pil_image)
       img_byte_arr = io.BytesIO()
-      pil_image.save(img_byte_arr, format="JPEG", quality=92)
+      Image.open(image_input).convert("RGB").save(img_byte_arr, format="JPEG")
       image_bytes = img_byte_arr.getvalue()
 
       try:
-        with st.spinner("Analyse expert en cours..."):
-          card = analyze_card_expert_vision(image_bytes)
+        with st.spinner("Analyse visuelle haute précision par Gemini..."):
+          card = analyze_card_gemini_cached(image_bytes)
 
         st.markdown("---")
         st.subheader("✏️ Vérifier et corriger les informations obtenues")
@@ -373,7 +314,10 @@ with tab1:
           if submit_button:
             cardmarket_url = build_cardmarket_url(
                 card.get("cardmarket_slug", edit_game_name),
-                card.get("cardmarket_search_term", f"{edit_card_name} {edit_card_number}"),
+                card.get(
+                    "cardmarket_search_term",
+                    f"{edit_card_name} {edit_card_number}",
+                ),
             )
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
@@ -412,13 +356,11 @@ with tab1:
         analyzed_cards = []
 
         for idx, file in enumerate(uploaded_files):
-          pil_img = Image.open(file).convert("RGB")
-          pil_img = resize_image_for_api(pil_img)
           img_byte_arr = io.BytesIO()
-          pil_img.save(img_byte_arr, format="JPEG", quality=92)
+          Image.open(file).convert("RGB").save(img_byte_arr, format="JPEG")
 
           try:
-            parsed_card = analyze_card_expert_vision(img_byte_arr.getvalue())
+            parsed_card = analyze_card_gemini_cached(img_byte_arr.getvalue())
             analyzed_cards.append(parsed_card)
           except Exception as e:
             st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
