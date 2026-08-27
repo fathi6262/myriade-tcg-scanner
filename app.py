@@ -204,15 +204,15 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
 def analyze_card_image_groq_cached(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-  prompt = """/no_think
-    Identifie cette carte TCG et génère STRICTEMENT l'objet JSON suivant :
+  prompt = """
+    Identifie cette carte TCG et génère un objet JSON structuré avec ces clés exactes :
     {
       "game_name": "Nom du jeu",
       "card_name": "Nom de la carte",
       "set_name": "Nom extension",
-      "card_number": "Numéro de la carte complet (EXACTEMENT sous la forme NUMÉRO/TOTAL si présent sur la carte, ex: 227/227, 199/165, 004/102)",
-      "rarity": "Rareté de la carte (ex: Commune, Rare, Épique, Légendaire, Champion, Secret Rare)",
-      "play_cost": "Coût de la carte en ressources/mana/énergie (ex: 3)",
+      "card_number": "Numéro complet (ex: 227/227, 199/165)",
+      "rarity": "Rareté",
+      "play_cost": "Coût de la carte",
       "cardmarket_slug": "Nom du jeu en un mot",
       "cardmarket_search_term": "Nom carte et extension",
       "language": "FR"
@@ -224,9 +224,9 @@ def analyze_card_image_groq_cached(image_bytes):
           {
               "role": "system",
               "content": (
-                  "/no_think Tu es un extracteur JSON TCG automatisé. N'utilise"
-                  " aucune réflexion ou balise <think>. Réponds uniquement par"
-                  " le bloc JSON."
+                  "Tu es une API JSON brute. Réponds EXCLUSIVEMENT avec un objet"
+                  " JSON valide. N'utilise jamais de balises <think> ni de"
+                  " blocs ```json."
               ),
           },
           {
@@ -243,23 +243,26 @@ def analyze_card_image_groq_cached(image_bytes):
           },
       ],
       model="qwen/qwen3.6-27b",
-      max_tokens=2048,
-      temperature=0.0,
-      extra_body={"reasoning_format": "hidden"},
+      max_tokens=1024,
+      temperature=0.1,
   )
 
   raw_text = chat_completion.choices[0].message.content
-  clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
 
+  # Nettoyage des balises <think>, des blocs de code ```json et du texte inutile
+  clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
+  clean_text = re.sub(r"```json\s*", "", clean_text)
+  clean_text = re.sub(r"```\s*", "", clean_text).strip()
+
+  # Extraction du bloc JSON entre { et }
   json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
   if json_match:
-    return json.loads(json_match.group())
+    try:
+      return json.loads(json_match.group())
+    except json.JSONDecodeError:
+      pass
 
-  json_match_raw = re.search(r"\{.*\}", raw_text, re.DOTALL)
-  if json_match_raw:
-    return json.loads(json_match_raw.group())
-
-  raise ValueError(f"Impossible d'extraire le JSON : {raw_text[:200]}")
+  raise ValueError(f"Format JSON invalide reçu : {raw_text[:150]}")
 
 
 # ---------------------------------------------------------
