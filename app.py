@@ -233,6 +233,16 @@ def analyze_card_image_groq_cached(image_bytes):
     séparés par "/" (ex: 227/221) et ils ne sont PAS toujours identiques.
     Lis chaque chiffre individuellement, un par un, avant et après le "/",
     sans supposer qu'ils sont égaux. Vérifie ta lecture avant de répondre.
+
+    Attention particulière pour "rarity" : sur de nombreux TCG (dont Legends
+    of Runeterra), la rareté n'est PAS écrite en toutes lettres sur la carte.
+    Elle est indiquée par un petit symbole/logo/gemme situé en bas de
+    l'illustration (souvent sous ou à côté du coût). Identifie ce symbole par
+    sa couleur et sa forme, puis déduis la rareté correspondante à partir de
+    tes connaissances du jeu identifié (par exemple pour Legends of
+    Runeterra : gemme grise/incolore = Commune, bleue = Rare, violette/rose =
+    Épique, orange/dorée animée = Champion). Ne te base pas sur le texte
+    imprimé si aucun mot de rareté n'est visible : base-toi sur ce symbole.
     """
 
   chat_completion = groq_client.chat.completions.create(
