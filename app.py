@@ -212,30 +212,32 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
-# STEP 1 : DÉDUCTION VISUELLE AVEC CONSIGNES ANTI-ERREURS OCR
+# STEP 1 : IDENTIFICATION NEUTRE MULTI-TCG SANS BIAIS
 @st.cache_data(show_spinner=False)
 def identify_card_visually(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
-    Exécute une analyse visuelle ciblée de la carte :
-    1. "game_name": Nom du jeu (ex: One Piece Card Game, Pokémon, Magic, Lorcana, Yu-Gi-Oh!).
-    2. "card_name": Nom exact de la carte. Si le nom est en japonais, donne le nom anglais/romaji officiel suivi du nom japonais entre parenthèses ou slashes (ex: "Monkey D. Luffy / モンキー・D・ルフィ").
-    3. "play_cost": Lis le coût en mana/ressource/énergie (ex: pour One Piece Card Game, c'est le chiffre à côté de DON!! en haut à gauche, ex: 5).
-    4. "language": "JP" pour japonais, "EN" pour anglais, "FR" pour français.
-    5. "printed_code_line": Recopie la référence exacte de la carte (ex: "ST21-014", "OP01-120"). 
-       ATTENTION STRICTE OCR : Les références de cartes se terminent TOUJOURS par des chiffres ! N'imprime JAMAIS de lettres au lieu de chiffres (ex: écris "014" et non "ON4" ou "O14").
+    Exécute une analyse visuelle pour identifier la carte TCG :
 
-    RÈGLES STRICTES :
-    - Pour One Piece Card Game, "DON!!" est le nom du coût/ressource, CE N'EST ABSOLUMENT PAS UNE RARETÉ.
-    - Les raretés imprimées sont C, UC, R, SR, SEC, L, P.
+    1. "game_name" : Identifie le jeu exact. Vérifie attentivement le copyright / éditeur au bas de la carte :
+       - ©RGI / Riot Games / Kudos Productions -> Riftbound (ou League of Legends TCG)
+       - ©Bandai -> One Piece Card Game / Dragon Ball Super Card Game
+       - ©Pokémon / Nintendo / Creatures -> Pokémon
+       - ©Disney / Ravensburger -> Lorcana
+       - ©Wizards of the Coast -> Magic: The Gathering
+       - ©Konami -> Yu-Gi-Oh!
+    2. "card_name" : Nom exact de la carte (ex: "Lightning Rush", "Monkey D. Luffy", "Charizard").
+    3. "play_cost" : Le chiffre du coût en mana/ressource/énergie (souvent en haut à gauche/droite dans un cercle ou symbole).
+    4. "language" : Langue du texte de la carte ("EN", "FR", "JP", "DE").
+    5. "printed_code_line" : Recopie INTÉGRALEMENT la ligne de référence imprimée en bas de carte (ex: "VEN 156/166 EN", "ST21-014", "SV03 199/165").
 
     Génère STRICTEMENT cet objet JSON :
     {
       "game_name": "",
       "card_name": "",
       "play_cost": "",
-      "language": "FR",
+      "language": "EN",
       "printed_code_line": ""
     }
     """
@@ -245,10 +247,10 @@ def identify_card_visually(image_bytes):
           {
               "role": "system",
               "content": (
-                  "Tu es un lecteur d'images TCG d'une précision chirurgicale."
-                  " Tu ne confondras jamais les chiffres '0' et '4' avec les"
-                  " lettres 'O' et 'N'. Tu réponds EXCLUSIVEMENT par un objet"
-                  " JSON valide sans aucune balise <think>."
+                  "Tu es un moteur OCR TCG neutre et universel. Tu ne privilégies"
+                  " aucun jeu par défaut. Tu lis les lignes de copyright et"
+                  " d'éditeur avec précision. Tu réponds EXCLUSIVEMENT par un"
+                  " objet JSON valide sans balise <think>."
               ),
           },
           {
@@ -293,7 +295,6 @@ def fetch_card_details_from_justtcg(game_name: str, card_name: str):
   if not api_key or not card_name:
     return {}
 
-  # Nettoyage du nom japonais pour la recherche API
   clean_search_name = card_name.split("/")[0].split("(")[0].strip()
 
   try:
@@ -321,25 +322,26 @@ def fetch_card_details_from_justtcg(game_name: str, card_name: str):
   return details
 
 
-# STEP 2B : RECHERCHE WEB AVEC CORRECTION D'ERREURS OCR
+# STEP 2B : RECHERCHE WEB CIBLÉE DUO GROQ / CARDMARKET
 @st.cache_data(show_spinner=False)
 def fetch_precise_card_details_from_web(
     game_name: str, card_name: str, printed_code_line: str = ""
 ):
   query = f"""Recherche sur le web et Cardmarket les métadonnées officielles exactes de cette carte :
 Jeu : « {game_name} »
-Nom : « {card_name} »
-Code brut OCR : « {printed_code_line} »
+Nom de la carte : « {card_name} »
+Code OCR imprimé : « {printed_code_line} »
 
-INSTRUCTIONS DE RECHERCHE ET DE CORRECTION :
-1. "card_number": Corrige les fautes de frappe OCR sur le code brut (ex: si l'OCR renvoie 'ST21-ON4' ou 'ST21-O14', CORRIGE-LE immédiatement en 'ST21-014'). Les codes de cartes se terminent TOUJOURS par des chiffres.
-2. "set_name": Retrouve le vrai nom de l'extension ou du deck (ex: 'STARTER DECK EX -GEAR5- [ST-21]' ou le nom de promo comme 'ONE PIECE magazine Vol.20 Promo'). N'invente JAMAIS un nom anglais générique comme 'The Azure Sea's Seven'.
-3. "rarity": Rareté officielle. Pour One Piece : C (Commune), UC (Peu Commune), R (Rare), SR (Super Rare), SEC (Secrète), P (Promo). Ne mets JAMAIS 'DON!!' comme rareté.
-4. "cardmarket_slug": Pour One Piece Card Game, utilise 'OnePiece'.
-5. "cardmarket_search_term": Termes exacts de recherche Cardmarket (Nom + Référence, ex: Monkey D Luffy ST21-014).
+CONSIGNES STRICTES :
+1. Recherche uniquement pour le jeu « {game_name} ». Ne propose jamais une extension ou une référence appartenant à un autre TCG.
+2. "card_number" : Numéro complet de la carte. Si le code contient une fraction (ex: 156/166, 227/227), CONSERVE IMPÉRATIVEMENT la fraction complète avec son total.
+3. "set_name" : Code ou nom d'extension officiel correspondant (ex: "VEN" ou "Vendetta").
+4. "rarity" : Rareté officielle.
+5. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot sans espace (ex: Riftbound, Pokemon, Lorcana, OnePiece, Magic, YuGiOh).
+6. "cardmarket_search_term" : Termes exacts pour chercher la carte sur Cardmarket (Nom + Référence).
 
 Réponds UNIQUEMENT sous la forme d'un objet JSON strict :
-{{"card_number": "", "set_name": "", "rarity": "", "cardmarket_slug": "OnePiece", "cardmarket_search_term": ""}}"""
+{{"card_number": "", "set_name": "", "rarity": "", "cardmarket_slug": "", "cardmarket_search_term": ""}}"""
 
   try:
     completion = groq_client.chat.completions.create(
@@ -360,7 +362,7 @@ Réponds UNIQUEMENT sous la forme d'un objet JSON strict :
 
 # MOTEUR DE FUSION ET D'ENRICHISSEMENT
 def process_full_card_data(image_bytes):
-  # 1. Identification du nom et du coût en mana
+  # 1. Identification visuelle du nom, jeu et coût
   visual_info = identify_card_visually(image_bytes)
 
   game_name = visual_info.get("game_name", "")
@@ -368,44 +370,38 @@ def process_full_card_data(image_bytes):
   play_cost = visual_info.get("play_cost", "")
   printed_code = visual_info.get("printed_code_line", "")
 
-  # Nettoyage automatique des erreurs OCR fréquentes (ON4 -> 014, O14 -> 014)
-  if printed_code:
-    printed_code = re.sub(
-        r"O([0-9])", r"0\1", printed_code, flags=re.IGNORECASE
-    )
-    printed_code = re.sub(
-        r"ON([0-9])", r"01\1", printed_code, flags=re.IGNORECASE
-    )
+  # Extraction du numéro brut depuis la ligne visuelle si présente (ex: 156/166)
+  extracted_number = ""
+  num_match = re.search(r"([A-Z0-9\-\/]+\s*[\d]+[\/\-][\d]+)", printed_code)
+  if num_match:
+    extracted_number = num_match.group(1).strip()
+  elif printed_code:
+    extracted_number = printed_code.strip()
 
   # 2. Interrogation JustTCG
   justtcg_data = fetch_card_details_from_justtcg(game_name, card_name)
 
-  # 3. Recherche Web avec correction d'OCR
+  # 3. Recherche Web
   web_data = fetch_precise_card_details_from_web(
       game_name, card_name, printed_code
   )
 
   # 4. Assemblage final
-  card_number = (
-      web_data.get("card_number")
-      or printed_code
-      or justtcg_data.get("card_number", "")
-  )
+  card_number = web_data.get("card_number") or extracted_number or printed_code
+
+  # Si la ligne visuelle contenait une fraction (ex: 156/166) et que la recherche a simplifié en VEN-156, on restaure la fraction
+  if "/" in printed_code and "/" not in card_number:
+    card_number = printed_code
+
   set_name = (
       web_data.get("set_name")
       or justtcg_data.get("set_name")
-      or printed_code
+      or (printed_code.split()[0] if printed_code else "")
   )
-  rarity = web_data.get("rarity") or justtcg_data.get("rarity") or "Super Rare"
-
-  # Filtre de sécurité anti-DON!! dans la rareté
-  if "DON" in rarity.upper():
-    rarity = "Super Rare (SR)"
-
-  slug = (
-      web_data.get("cardmarket_slug")
-      or ("OnePiece" if "ONE PIECE" in game_name.upper() else game_name)
+  rarity = (
+      web_data.get("rarity") or justtcg_data.get("rarity") or "Non spécifiée"
   )
+  slug = web_data.get("cardmarket_slug") or game_name.replace(" ", "")
   search_term = web_data.get(
       "cardmarket_search_term", f"{card_name} {card_number}"
   )
@@ -417,7 +413,7 @@ def process_full_card_data(image_bytes):
       "card_number": card_number,
       "rarity": rarity,
       "play_cost": play_cost,
-      "language": visual_info.get("language", "FR"),
+      "language": visual_info.get("language", "EN"),
       "cardmarket_slug": slug,
       "cardmarket_search_term": search_term,
   }
@@ -458,10 +454,7 @@ with tab1:
       image_bytes = img_byte_arr.getvalue()
 
       try:
-        with st.spinner(
-            "Analyse visuelle & correction automatique des données sur le"
-            " web..."
-        ):
+        with st.spinner("Analyse visuelle & recherche des données..."):
           card = process_full_card_data(image_bytes)
 
         st.markdown("---")
@@ -483,11 +476,11 @@ with tab1:
 
           with col2:
             edit_card_number = st.text_input(
-                "Numéro de carte (ex: ST21-014)",
+                "Numéro de carte (ex: 156/166)",
                 value=card.get("card_number", ""),
             )
             edit_rarity = st.text_input(
-                "Rareté", value=card.get("rarity", "Super Rare (SR)")
+                "Rareté", value=card.get("rarity", "Commune")
             )
             edit_play_cost = st.text_input(
                 "Coût (Mana/Ressource)", value=str(card.get("play_cost", ""))
@@ -495,7 +488,7 @@ with tab1:
 
           with col3:
             edit_language = st.text_input(
-                "Langue", value=card.get("language", "FR")
+                "Langue", value=card.get("language", "EN")
             )
             edit_emplacement = st.text_input(
                 "Emplacement physique", value="Classeur 1"
@@ -580,8 +573,8 @@ with tab1:
             "Numéro": c.get("card_number", ""),
             "Rareté": c.get("rarity", ""),
             "Coût": c.get("play_cost", ""),
-            "Langue": c.get("language", "FR"),
-            "Slug Cardmarket": c.get("cardmarket_slug", "OnePiece"),
+            "Langue": c.get("language", "EN"),
+            "Slug Cardmarket": c.get("cardmarket_slug", "Pokemon"),
             "Terme Recherche": c.get(
                 "cardmarket_search_term", c.get("card_name", "")
             ),
@@ -707,7 +700,7 @@ with tab2:
             )
             st.caption(
                 f"Rareté : {row.get('Rareté', 'N/A')} •"
-                f" {row.get('Langue', 'FR')}"
+                f" {row.get('Langue', 'EN')}"
             )
 
           with c_qty:
