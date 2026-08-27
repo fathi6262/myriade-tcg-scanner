@@ -218,10 +218,11 @@ def analyze_card_image_groq_cached(image_bytes):
   prompt = """
     Identifie cette carte TCG et génère un objet JSON structuré avec ces clés exactes :
     {
+      "printed_code_line": "Le petit code imprimé sur la carte, transcrit tel quel",
       "game_name": "Nom du jeu",
       "card_name": "Nom de la carte",
-      "set_name": "Nom extension",
-      "card_number": "Numéro complet (ex: 227/227, 199/165)",
+      "set_name": "Code d'extension",
+      "card_number": "Numéro tel qu'imprimé",
       "rarity": "Rareté",
       "play_cost": "Coût de la carte",
       "cardmarket_slug": "Nom du jeu en un mot",
@@ -229,14 +230,34 @@ def analyze_card_image_groq_cached(image_bytes):
       "language": "FR"
     }
 
-    Attention particulière pour "card_number" : ce champ contient deux nombres
-    séparés par "/" (ex: 227/221) et ils ne sont PAS toujours identiques.
-    Lis chaque chiffre individuellement, un par un, avant et après le "/",
-    sans supposer qu'ils sont égaux. Vérifie ta lecture avant de répondre.
+    MÉTHODE OBLIGATOIRE : la plupart des TCG impriment un petit code compact
+    dans un coin de la carte (souvent en bas), qui regroupe ensemble le code
+    d'extension, le numéro de carte et l'abréviation de rareté (par exemple :
+    "OP01-120 SEC" pour One Piece Card Game, ou "SWSH045" pour Pokémon, ou
+    "227/221 R" pour d'autres jeux). Repère cette ligne en premier, transcris-
+    la EXACTEMENT dans "printed_code_line", puis déduis les champs suivants
+    à partir de cette transcription plutôt que de les inventer séparément :
 
-    Pour "rarity" : donne ta meilleure estimation à partir du texte ou du
-    symbole visible (elle pourra être vérifiée et corrigée ensuite via une
-    recherche web, donc ce n'est pas grave si tu n'es pas sûr).
+    - "set_name" : le CODE d'extension tel qu'imprimé (ex: "OP01", "ST01",
+      "SWSH045"). N'invente JAMAIS un nom thématique ou narratif (ex: "The
+      Four Emperors", "Romance Dawn") si ce n'est pas littéralement le texte
+      imprimé sur la carte — utilise uniquement le code visible.
+    - "card_number" : recopie le numéro EXACTEMENT tel qu'il est imprimé.
+      Tous les jeux n'utilisent PAS un format "X/Y" : certains n'impriment
+      qu'un seul nombre (ex: One Piece Card Game). Si un seul nombre est
+      imprimé, ne le duplique pas et n'invente pas de second nombre après
+      un "/" — laisse le champ tel quel (ex: "120", pas "120/120").
+    - "rarity" : de nombreux jeux impriment une abréviation de rareté à côté
+      du numéro (ex pour One Piece Card Game : L=Leader, C=Commune,
+      UC=Peu Commune, R=Rare, SR=Super Rare, SEC=Secrète, P=Promo). Si tu
+      repères cette abréviation, développe-la en toutes lettres. Ne
+      remplace jamais une abréviation clairement visible par une estimation
+      basée sur la couleur d'un symbole.
+
+    Si aucun code compact n'est visible ou lisible, laisse
+    "printed_code_line" vide et fais de ton mieux pour chaque champ
+    individuellement, en restant fidèle à ce qui est réellement imprimé
+    plutôt qu'à ce qui te semblerait plausible.
     """
 
   chat_completion = groq_client.chat.completions.create(
@@ -294,19 +315,30 @@ def analyze_card_image_groq_cached(image_bytes):
 
 
 @st.cache_data(show_spinner=False)
-def fetch_rarity_from_web(game_name: str, card_name: str, set_name: str, card_number: str):
+def fetch_rarity_from_web(
+    game_name: str,
+    card_name: str,
+    set_name: str,
+    card_number: str,
+    printed_code_line: str = "",
+):
   """Recherche la rareté réelle de la carte sur le web via Groq Compound
   (recherche web intégrée, propulsée par Tavily), plutôt que de la déduire
   visuellement. Retourne None en cas d'échec (réseau, quota, réponse
   ambiguë) pour permettre un repli silencieux sur la valeur du scan visuel."""
+  code_hint = (
+      f" Le code imprimé sur la carte est : « {printed_code_line} »."
+      if printed_code_line
+      else ""
+  )
   query = (
       "Recherche sur le web la rareté officielle exacte de cette carte à"
       f" jouer : jeu « {game_name} », carte « {card_name} », extension «"
-      f" {set_name} », numéro {card_number}. Réponds uniquement par le nom"
-      " de la rareté en un ou deux mots (ex: Commune, Peu Commune, Rare,"
-      " Épique, Légendaire, Champion, Mythique), sans phrase ni"
-      " explication. Si tu ne trouves pas d'information fiable, réponds"
-      " exactement : INCONNU."
+      f" {set_name} », numéro {card_number}.{code_hint} Réponds uniquement"
+      " par le nom de la rareté en un ou deux mots (ex: Commune, Peu"
+      " Commune, Rare, Super Rare, Secrète, Épique, Légendaire, Champion,"
+      " Mythique), sans phrase ni explication. Si tu ne trouves pas"
+      " d'information fiable, réponds exactement : INCONNU."
   )
 
   try:
@@ -371,6 +403,7 @@ with tab1:
               card.get("card_name", ""),
               card.get("set_name", ""),
               card.get("card_number", ""),
+              card.get("printed_code_line", ""),
           )
           if web_rarity:
             card["rarity"] = web_rarity
@@ -474,6 +507,7 @@ with tab1:
                 parsed_card.get("card_name", ""),
                 parsed_card.get("set_name", ""),
                 parsed_card.get("card_number", ""),
+                parsed_card.get("printed_code_line", ""),
             )
             if web_rarity:
               parsed_card["rarity"] = web_rarity
