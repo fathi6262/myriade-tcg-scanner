@@ -175,7 +175,7 @@ sheet = get_google_sheet()
 
 
 # ---------------------------------------------------------
-# 3. FONCTIONS UTILITAIRES & CACHE IA
+# 3. FONCTIONS UTILITAIRES ET SERVICES EXTERNES
 # ---------------------------------------------------------
 def update_sheet_data(dataframe):
   sheet.clear()
@@ -194,9 +194,8 @@ def render_kpi(label: str, value: str, icon: str = ""):
 
 
 def resize_image_for_api(
-    pil_image: Image.Image, max_dimension: int = 1600
+    pil_image: Image.Image, max_dimension: int = 1280
 ) -> Image.Image:
-  """Augmentation à 1600px pour préserver la lisibilité des textes minuscules en bas de carte."""
   width, height = pil_image.size
   if max(width, height) <= max_dimension:
     return pil_image
@@ -213,40 +212,26 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
+# STEP 1 : IA VISION (IDENTIFICATION BRUTE UNIQUEMENT)
 @st.cache_data(show_spinner=False)
-def analyze_card_image_groq_cached(image_bytes):
+def identify_card_visually(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
-    Exécute une analyse OCR visuelle ultra-précise de cette carte TCG.
+    Identifie l'identité visuelle de cette carte TCG, sans te préoccuper de la disposition ou de la localisation des éléments sur l'image.
 
-    DIRECTIVES D'ANALYSE ZONE PAR ZONE :
-    1. EN HAUT DE LA CARTE :
-       - "play_cost" : Repère le coût en mana/ressource/énergie (chiffre souvent dans un cercle/gemme en haut à gauche ou à droite).
-       - "card_name" : Transcris le titre exact au centre supérieur (ex: "Ahri", "Dracaufeu ex", "Pikachu").
-    2. EN BAS DE LA CARTE (TEXTE MINUSCULE - ZONE CRITIQUE) :
-       - "printed_code_line" : Recopie INTÉGRALEMENT la ligne de code en bas de carte (ex: "SFO • 227/227", "OP01-120 SEC", "SV03 199/165").
-       - "set_name" : Le code d'extension littéral imprimé (ex: "SFO", "OP01", "SV03"). N'invente jamais un nom narratif s'il n'est pas écrit.
-       - "card_number" : Le numéro EXACT. S'il est sous forme de fraction "XXX/YYY" (ex: "227/227"), CONSERVE OBLIGATOIREMENT le dénominateur ("/227"). Ne le tronque jamais à un simple chiffre.
-       - "rarity" : La rareté (Commune, Peu Commune, Rare, Super Rare, Secrète Rare, Champion, etc.).
-    3. MÉTADONNÉES DU JEU :
-       - "game_name" : Le nom du jeu (ex: "Pokémon", "Magic", "Lorcana", "One Piece Card Game", "Riftbound", "Yu-Gi-Oh!").
-       - "cardmarket_slug" : Nom du jeu en 1 seul mot pour l'URL Cardmarket (ex: "Pokemon", "Magic", "Lorcana", "OnePiece").
-       - "cardmarket_search_term" : Combinaison Nom de carte + Extension.
-       - "language" : Langue du texte principal ("FR", "EN", "JP", "DE").
+    Extrais uniquement :
+    - "game_name": Nom du jeu (ex: Pokémon, Magic, Disney Lorcana, One Piece Card Game, Riftbound, Yu-Gi-Oh!).
+    - "card_name": Nom exact du personnage ou titre principal de la carte.
+    - "language": Langue du texte principal ("FR", "EN", "JP", "DE").
+    - "printed_code_line": Tout code brut ou numéro aperçu n'importe où sur la carte (ex: "SFO 227/227", "OP01-120", "SV03 199/165").
 
     Génère STRICTEMENT cet objet JSON :
     {
-      "printed_code_line": "",
       "game_name": "",
       "card_name": "",
-      "set_name": "",
-      "card_number": "",
-      "rarity": "",
-      "play_cost": "",
-      "cardmarket_slug": "",
-      "cardmarket_search_term": "",
-      "language": "FR"
+      "language": "FR",
+      "printed_code_line": ""
     }
     """
 
@@ -255,10 +240,9 @@ def analyze_card_image_groq_cached(image_bytes):
           {
               "role": "system",
               "content": (
-                  "Tu es un moteur OCR expert en cartes à jouer (TCG). Tu"
-                  " lis les textes minuscules avec précision et réponds"
-                  " EXCLUSIVEMENT avec un objet JSON valide sans aucune"
-                  " balise <think>."
+                  "Tu es un identificateur de cartes TCG. Tu reconnais l'identité"
+                  " de la carte à partir du visuel sans analyser sa mise en page."
+                  " Tu réponds EXCLUSIVEMENT avec un objet JSON valide."
               ),
           },
           {
@@ -275,14 +259,13 @@ def analyze_card_image_groq_cached(image_bytes):
           },
       ],
       model="qwen/qwen3.6-27b",
-      max_tokens=1024,
+      max_tokens=512,
       temperature=0.0,
       reasoning_format="hidden",
       reasoning_effort="none",
   )
 
   raw_text = chat_completion.choices[0].message.content
-
   clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
   clean_text = re.sub(r"```json\s*", "", clean_text)
   clean_text = re.sub(r"```\s*", "", clean_text).strip()
@@ -294,16 +277,10 @@ def analyze_card_image_groq_cached(image_bytes):
     except json.JSONDecodeError:
       pass
 
-  json_match_raw = re.search(r"\{.*\}", raw_text, re.DOTALL)
-  if json_match_raw:
-    try:
-      return json.loads(json_match_raw.group())
-    except json.JSONDecodeError:
-      pass
-
-  raise ValueError(f"Format JSON invalide reçu : {raw_text[:200]}")
+  raise ValueError(f"Identification visuelle impossible : {raw_text[:200]}")
 
 
+# STEP 2A : API JUSTTCG (BASE STRUCTURÉE)
 @st.cache_data(show_spinner=False)
 def fetch_card_details_from_justtcg(game_name: str, card_name: str):
   api_key = st.secrets.get("JUSTTCG_API_KEY")
@@ -344,33 +321,24 @@ def fetch_card_details_from_justtcg(game_name: str, card_name: str):
   return details
 
 
+# STEP 2B : RECHERCHE WEB DUO GROQ / CARDMARKET
 @st.cache_data(show_spinner=False)
 def fetch_precise_card_details_from_web(
-    game_name: str,
-    card_name: str,
-    rough_set_hint: str = "",
-    rough_number_hint: str = "",
-    printed_code_line: str = "",
+    game_name: str, card_name: str, printed_code_line: str = ""
 ):
-  hints = []
-  if rough_set_hint:
-    hints.append(f"extension imprimée : « {rough_set_hint} »")
-  if rough_number_hint:
-    hints.append(f"numéro imprimé : « {rough_number_hint} »")
-  if printed_code_line:
-    hints.append(f"code complet bas de carte : « {printed_code_line} »")
-  hints_text = (
-      f" Indices issus de l'OCR visuel : {' ; '.join(hints)}." if hints else ""
-  )
-
   query = (
-      "Recherche les données officielles exactes de cette carte TCG :"
-      f" Jeu « {game_name} », Carte « {card_name} ».{hints_text}\n\n"
-      "Consigne sur le numéro : si le numéro d'origine comporte une fraction"
-      " (ex: 227/227), tu DOIS renvoyer la fraction complète.\n"
-      "Réponds UNIQUEMENT avec un objet JSON strict au format :\n"
-      '{"set_name": "nom ou code officiel", "card_number": "numéro complet",'
-      ' "rarity": "rareté en français"}'
+      f"Recherche les données officielles de la carte TCG : Jeu « {game_name} », Carte « {card_name} »"
+      + (f", Code/Texte brut « {printed_code_line} »" if printed_code_line else "")
+      + ".\n\n"
+      "Retrouve sur le web / Cardmarket les informations exactes :\n"
+      "- set_name: Nom ou code officiel de l'extension\n"
+      "- card_number: Numéro complet (garder la fraction XXX/YYY si existante)\n"
+      "- rarity: Rareté officielle en français\n"
+      "- play_cost: Coût en ressources/mana/énergie\n"
+      "- cardmarket_slug: Nom de la catégorie du jeu sur Cardmarket en 1 mot sans espace (ex: Pokemon, Magic, Lorcana, OnePiece, YuGiOh)\n"
+      "- cardmarket_search_term: Termes de recherche pour Cardmarket (Nom + Extension)\n\n"
+      "Réponds UNIQUEMENT sous la forme d'un objet JSON strict :\n"
+      '{"set_name": "", "card_number": "", "rarity": "", "play_cost": "", "cardmarket_slug": "", "cardmarket_search_term": ""}'
   )
 
   try:
@@ -378,16 +346,62 @@ def fetch_precise_card_details_from_web(
         model="groq/compound",
         messages=[{"role": "user", "content": query}],
         temperature=0.0,
-        max_tokens=300,
+        max_tokens=400,
     )
     raw_text = completion.choices[0].message.content.strip()
     json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-    if not json_match:
-      return {}
-    result = json.loads(json_match.group())
-    return {k: v for k, v in result.items() if isinstance(v, str) and v.strip()}
+    if json_match:
+      result = json.loads(json_match.group())
+      return {k: str(v).strip() for k, v in result.items() if v}
   except Exception:
-    return {}
+    pass
+  return {}
+
+
+# MOTEUR COMPLET D'ENRICHISSEMENT
+def process_full_card_data(image_bytes):
+  # 1. Identification visuelle brute
+  visual_info = identify_card_visually(image_bytes)
+
+  game_name = visual_info.get("game_name", "")
+  card_name = visual_info.get("card_name", "")
+  printed_code = visual_info.get("printed_code_line", "")
+
+  # 2. Interrogation JustTCG
+  justtcg_data = fetch_card_details_from_justtcg(game_name, card_name)
+
+  # 3. Interrogation Web & Cardmarket
+  web_data = fetch_precise_card_details_from_web(
+      game_name, card_name, printed_code
+  )
+
+  # 4. Assemblage final
+  set_name = (
+      justtcg_data.get("set_name")
+      or web_data.get("set_name")
+      or visual_info.get("printed_code_line", "")
+  )
+  rarity = (
+      justtcg_data.get("rarity") or web_data.get("rarity") or "Non spécifiée"
+  )
+  card_number = web_data.get("card_number") or printed_code
+  play_cost = web_data.get("play_cost", "")
+  slug = web_data.get("cardmarket_slug") or game_name
+  search_term = web_data.get(
+      "cardmarket_search_term", f"{card_name} {set_name}"
+  )
+
+  return {
+      "game_name": game_name,
+      "card_name": card_name,
+      "set_name": set_name,
+      "card_number": card_number,
+      "rarity": rarity,
+      "play_cost": play_cost,
+      "language": visual_info.get("language", "FR"),
+      "cardmarket_slug": slug,
+      "cardmarket_search_term": search_term,
+  }
 
 
 # ---------------------------------------------------------
@@ -421,39 +435,17 @@ with tab1:
       pil_image = Image.open(image_input).convert("RGB")
       pil_image = resize_image_for_api(pil_image)
       img_byte_arr = io.BytesIO()
-      pil_image.save(img_byte_arr, format="JPEG", quality=95)
+      pil_image.save(img_byte_arr, format="JPEG", quality=92)
       image_bytes = img_byte_arr.getvalue()
 
       try:
-        with st.spinner("Analyse visuelle haute précision par Groq..."):
-          card = analyze_card_image_groq_cached(image_bytes)
-
-        with st.spinner("Vérification dans la base de données TCG..."):
-          justtcg_fields = fetch_card_details_from_justtcg(
-              card.get("game_name", ""), card.get("card_name", "")
-          )
-
-        with st.spinner("Validation complémentaire..."):
-          web_fields = fetch_precise_card_details_from_web(
-              card.get("game_name", ""),
-              card.get("card_name", ""),
-              justtcg_fields.get("set_name", card.get("set_name", "")),
-              card.get("card_number", ""),
-              card.get("printed_code_line", ""),
-          )
-
-          # Fusion sécurisée : Si l'OCR visuel a trouvé une fraction (ex: 227/227),
-          # on ne laisse pas la recherche web la remplacer par un nombre simple tronqué.
-          vision_number = card.get("card_number", "")
-          web_number = web_fields.get("card_number", "")
-
-          card.update({**web_fields, **justtcg_fields})
-
-          if "/" in vision_number and "/" not in web_number:
-            card["card_number"] = vision_number
+        with st.spinner(
+            "Identification visuelle & recherche des données officielles..."
+        ):
+          card = process_full_card_data(image_bytes)
 
         st.markdown("---")
-        st.subheader("✏️ Vérifier et corriger les informations scannées")
+        st.subheader("✏️ Vérifier et corriger les informations obtenues")
 
         with st.form("single_add_form"):
           col1, col2, col3 = st.columns(3)
@@ -540,33 +532,10 @@ with tab1:
           pil_img = Image.open(file).convert("RGB")
           pil_img = resize_image_for_api(pil_img)
           img_byte_arr = io.BytesIO()
-          pil_img.save(img_byte_arr, format="JPEG", quality=95)
+          pil_img.save(img_byte_arr, format="JPEG", quality=92)
 
           try:
-            parsed_card = analyze_card_image_groq_cached(
-                img_byte_arr.getvalue()
-            )
-            justtcg_fields = fetch_card_details_from_justtcg(
-                parsed_card.get("game_name", ""),
-                parsed_card.get("card_name", ""),
-            )
-            web_fields = fetch_precise_card_details_from_web(
-                parsed_card.get("game_name", ""),
-                parsed_card.get("card_name", ""),
-                justtcg_fields.get(
-                    "set_name", parsed_card.get("set_name", "")
-                ),
-                parsed_card.get("card_number", ""),
-                parsed_card.get("printed_code_line", ""),
-            )
-
-            vision_number = parsed_card.get("card_number", "")
-            web_number = web_fields.get("card_number", "")
-
-            parsed_card.update({**web_fields, **justtcg_fields})
-            if "/" in vision_number and "/" not in web_number:
-              parsed_card["card_number"] = vision_number
-
+            parsed_card = process_full_card_data(img_byte_arr.getvalue())
             analyzed_cards.append(parsed_card)
           except Exception as e:
             st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
