@@ -10,6 +10,7 @@ from groq import Groq
 import gspread
 import pandas as pd
 from PIL import Image
+import requests
 import streamlit as st
 
 # ---------------------------------------------------------
@@ -315,6 +316,58 @@ def analyze_card_image_groq_cached(image_bytes):
 
 
 @st.cache_data(show_spinner=False)
+def fetch_card_details_from_justtcg(game_name: str, card_name: str):
+  """Interroge la base de données structurée JustTCG (api.justtcg.com) pour
+  retrouver l'extension et la rareté officielles d'une carte. Contrairement
+  à une recherche web interprétée par un LLM, il s'agit d'une base de
+  données indexée — plus fiable, quand la carte y figure. Nécessite une clé
+  st.secrets["JUSTTCG_API_KEY"] (compte gratuit sur justtcg.com ; le palier
+  gratuit est réservé à un usage non commercial, un plan payant est
+  nécessaire pour un usage en boutique). Ne renvoie PAS card_number : ce
+  champ n'est pas garanti par leur schéma de réponse documenté. Retourne un
+  dict vide si aucune clé n'est configurée, si rien n'est trouvé, ou en cas
+  d'erreur — repli silencieux vers l'étape suivante."""
+  api_key = st.secrets.get("JUSTTCG_API_KEY")
+  if not api_key or not card_name:
+    return {}
+
+  try:
+    response = requests.get(
+        "https://api.justtcg.com/v1/cards",
+        headers={"x-api-key": api_key},
+        params={"q": card_name, "game": game_name, "limit": 5},
+        timeout=8,
+    )
+    response.raise_for_status()
+    results = response.json().get("data", [])
+  except Exception:
+    return {}
+
+  if not results:
+    return {}
+
+  # On privilégie une correspondance exacte du nom pour éviter de prendre
+  # par erreur une carte homonyme d'une autre extension
+  card_name_lower = card_name.strip().lower()
+  best_match = next(
+      (
+          c
+          for c in results
+          if c.get("name", "").strip().lower() == card_name_lower
+      ),
+      results[0],
+  )
+
+  details = {}
+  set_value = best_match.get("set_name") or best_match.get("set")
+  if set_value:
+    details["set_name"] = set_value
+  if best_match.get("rarity"):
+    details["rarity"] = best_match["rarity"]
+  return details
+
+
+@st.cache_data(show_spinner=False)
 def fetch_precise_card_details_from_web(
     game_name: str,
     card_name: str,
@@ -418,15 +471,22 @@ with tab1:
         with st.spinner("Analyse visuelle par Groq..."):
           card = analyze_card_image_groq_cached(image_bytes)
 
-        with st.spinner("Vérification de l'extension, du numéro et de la rareté sur le web..."):
-          verified_fields = fetch_precise_card_details_from_web(
+        with st.spinner("Vérification de l'extension et de la rareté (base de données)..."):
+          justtcg_fields = fetch_card_details_from_justtcg(
+              card.get("game_name", ""), card.get("card_name", "")
+          )
+
+        with st.spinner("Vérification complémentaire sur le web..."):
+          web_fields = fetch_precise_card_details_from_web(
               card.get("game_name", ""),
               card.get("card_name", ""),
-              card.get("set_name", ""),
+              justtcg_fields.get("set_name", card.get("set_name", "")),
               card.get("card_number", ""),
               card.get("printed_code_line", ""),
           )
-          card.update(verified_fields)
+          # JustTCG (base structurée) est prioritaire quand il a une réponse ;
+          # le web comble le reste, notamment card_number (non garanti par JustTCG)
+          card.update({**web_fields, **justtcg_fields})
 
         st.markdown("---")
         st.subheader("✏️ Vérifier et corriger les informations scannées")
@@ -522,14 +582,17 @@ with tab1:
             parsed_card = analyze_card_image_groq_cached(
                 img_byte_arr.getvalue()
             )
-            verified_fields = fetch_precise_card_details_from_web(
+            justtcg_fields = fetch_card_details_from_justtcg(
+                parsed_card.get("game_name", ""), parsed_card.get("card_name", "")
+            )
+            web_fields = fetch_precise_card_details_from_web(
                 parsed_card.get("game_name", ""),
                 parsed_card.get("card_name", ""),
-                parsed_card.get("set_name", ""),
+                justtcg_fields.get("set_name", parsed_card.get("set_name", "")),
                 parsed_card.get("card_number", ""),
                 parsed_card.get("printed_code_line", ""),
             )
-            parsed_card.update(verified_fields)
+            parsed_card.update({**web_fields, **justtcg_fields})
             analyzed_cards.append(parsed_card)
           except Exception as e:
             st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
