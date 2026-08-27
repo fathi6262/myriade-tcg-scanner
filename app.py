@@ -234,15 +234,9 @@ def analyze_card_image_groq_cached(image_bytes):
     Lis chaque chiffre individuellement, un par un, avant et après le "/",
     sans supposer qu'ils sont égaux. Vérifie ta lecture avant de répondre.
 
-    Attention particulière pour "rarity" : sur de nombreux TCG (dont Legends
-    of Runeterra), la rareté n'est PAS écrite en toutes lettres sur la carte.
-    Elle est indiquée par un petit symbole/logo/gemme situé en bas de
-    l'illustration (souvent sous ou à côté du coût). Identifie ce symbole par
-    sa couleur et sa forme, puis déduis la rareté correspondante à partir de
-    tes connaissances du jeu identifié (par exemple pour Legends of
-    Runeterra : gemme grise/incolore = Commune, bleue = Rare, violette/rose =
-    Épique, orange/dorée animée = Champion). Ne te base pas sur le texte
-    imprimé si aucun mot de rareté n'est visible : base-toi sur ce symbole.
+    Pour "rarity" : donne ta meilleure estimation à partir du texte ou du
+    symbole visible (elle pourra être vérifiée et corrigée ensuite via une
+    recherche web, donc ce n'est pas grave si tu n'es pas sûr).
     """
 
   chat_completion = groq_client.chat.completions.create(
@@ -299,6 +293,40 @@ def analyze_card_image_groq_cached(image_bytes):
   raise ValueError(f"Format JSON invalide reçu : {raw_text[:200]}")
 
 
+@st.cache_data(show_spinner=False)
+def fetch_rarity_from_web(game_name: str, card_name: str, set_name: str, card_number: str):
+  """Recherche la rareté réelle de la carte sur le web via Groq Compound
+  (recherche web intégrée, propulsée par Tavily), plutôt que de la déduire
+  visuellement. Retourne None en cas d'échec (réseau, quota, réponse
+  ambiguë) pour permettre un repli silencieux sur la valeur du scan visuel."""
+  query = (
+      "Recherche sur le web la rareté officielle exacte de cette carte à"
+      f" jouer : jeu « {game_name} », carte « {card_name} », extension «"
+      f" {set_name} », numéro {card_number}. Réponds uniquement par le nom"
+      " de la rareté en un ou deux mots (ex: Commune, Peu Commune, Rare,"
+      " Épique, Légendaire, Champion, Mythique), sans phrase ni"
+      " explication. Si tu ne trouves pas d'information fiable, réponds"
+      " exactement : INCONNU."
+  )
+
+  try:
+    completion = groq_client.chat.completions.create(
+        model="groq/compound-mini",
+        messages=[{"role": "user", "content": query}],
+        temperature=0.0,
+        max_tokens=50,
+    )
+    answer = completion.choices[0].message.content.strip()
+    answer = answer.strip(" .\n\"'")
+
+    if not answer or answer.upper() == "INCONNU" or len(answer) > 40:
+      return None
+    return answer
+  except Exception:
+    # Recherche web best-effort : en cas d'échec on garde la valeur du scan visuel
+    return None
+
+
 # ---------------------------------------------------------
 # 4. APPLICATION STREAMLIT
 # ---------------------------------------------------------
@@ -336,6 +364,16 @@ with tab1:
       try:
         with st.spinner("Analyse visuelle par Groq..."):
           card = analyze_card_image_groq_cached(image_bytes)
+
+        with st.spinner("Vérification de la rareté sur le web..."):
+          web_rarity = fetch_rarity_from_web(
+              card.get("game_name", ""),
+              card.get("card_name", ""),
+              card.get("set_name", ""),
+              card.get("card_number", ""),
+          )
+          if web_rarity:
+            card["rarity"] = web_rarity
 
         st.markdown("---")
         st.subheader("✏️ Vérifier et corriger les informations scannées")
@@ -431,6 +469,14 @@ with tab1:
             parsed_card = analyze_card_image_groq_cached(
                 img_byte_arr.getvalue()
             )
+            web_rarity = fetch_rarity_from_web(
+                parsed_card.get("game_name", ""),
+                parsed_card.get("card_name", ""),
+                parsed_card.get("set_name", ""),
+                parsed_card.get("card_number", ""),
+            )
+            if web_rarity:
+              parsed_card["rarity"] = web_rarity
             analyzed_cards.append(parsed_card)
           except Exception as e:
             st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
