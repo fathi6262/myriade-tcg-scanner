@@ -210,11 +210,12 @@ def analyze_card_image_groq_cached(image_bytes):
       "game_name": "Nom du jeu",
       "card_name": "Nom de la carte",
       "set_name": "Nom extension",
-      "card_number": "Numéro carte",
+      "card_number": "Numéro de la carte complet (EXACTEMENT sous la forme NUMÉRO/TOTAL si présent sur la carte, ex: 227/227, 199/165, 004/102)",
+      "rarity": "Rareté de la carte (ex: Commune, Rare, Épique, Légendaire, Champion, Secret Rare)",
+      "play_cost": "Coût de la carte en ressources/mana/énergie (ex: 3)",
       "cardmarket_slug": "Nom du jeu en un mot",
       "cardmarket_search_term": "Nom carte et extension",
-      "language": "FR",
-      "is_foil": "Normal"
+      "language": "FR"
     }
     """
 
@@ -301,7 +302,6 @@ with tab1:
         st.markdown("---")
         st.subheader("✏️ Vérifier et corriger les informations scannées")
 
-        # Formulaire avec champs éditables avant envoi dans Google Sheets
         with st.form("single_add_form"):
           col1, col2, col3 = st.columns(3)
 
@@ -318,33 +318,19 @@ with tab1:
 
           with col2:
             edit_card_number = st.text_input(
-                "Numéro de carte", value=card.get("card_number", "")
+                "Numéro de carte (ex: 227/227)",
+                value=card.get("card_number", ""),
             )
-            edit_language = st.text_input(
-                "Langue", value=card.get("language", "FR")
+            edit_rarity = st.text_input(
+                "Rareté", value=card.get("rarity", "Commune")
             )
-
-            foil_options = ["Normal", "Holo/Foil", "Reverse"]
-            default_foil = card.get("is_foil", "Normal")
-            foil_idx = (
-                foil_options.index(default_foil)
-                if default_foil in foil_options
-                else 0
-            )
-            edit_is_foil = st.selectbox(
-                "Finition", foil_options, index=foil_idx
+            edit_play_cost = st.text_input(
+                "Coût (Mana/Ressource)", value=str(card.get("play_cost", ""))
             )
 
           with col3:
-            edit_condition = st.selectbox(
-                "État",
-                [
-                    "Near Mint (NM)",
-                    "Excellent (EX)",
-                    "Good (GD)",
-                    "Light Played (LP)",
-                    "Played (PL)",
-                ],
+            edit_language = st.text_input(
+                "Langue", value=card.get("language", "FR")
             )
             edit_emplacement = st.text_input(
                 "Emplacement physique", value="Classeur 1"
@@ -369,9 +355,9 @@ with tab1:
                 edit_card_name,
                 edit_set_name,
                 edit_card_number,
-                edit_is_foil,
+                edit_rarity,
+                edit_play_cost,
                 edit_language,
-                edit_condition,
                 edit_emplacement,
                 edit_quantite,
                 cardmarket_url,
@@ -389,21 +375,9 @@ with tab1:
     )
 
     if uploaded_files:
-      c_batch_loc, c_batch_cond = st.columns(2)
-      with c_batch_loc:
-        batch_loc = st.text_input(
-            "Emplacement commun pour ce lot :", value="Boîte Arrivage"
-        )
-      with c_batch_cond:
-        batch_cond = st.selectbox(
-            "État commun :",
-            [
-                "Near Mint (NM)",
-                "Excellent (EX)",
-                "Good (GD)",
-                "Light Played (LP)",
-            ],
-        )
+      batch_loc = st.text_input(
+          "Emplacement commun pour ce lot :", value="Boîte Arrivage"
+      )
 
       if st.button(f"⚡ Analyser le lot ({len(uploaded_files)} images)"):
         progress_bar = st.progress(0)
@@ -440,7 +414,8 @@ with tab1:
             "Nom": c.get("card_name", ""),
             "Extension": c.get("set_name", ""),
             "Numéro": c.get("card_number", ""),
-            "Finition": c.get("is_foil", "Normal"),
+            "Rareté": c.get("rarity", ""),
+            "Coût": c.get("play_cost", ""),
             "Langue": c.get("language", "FR"),
             "Slug Cardmarket": c.get("cardmarket_slug", "Pokemon"),
             "Terme Recherche": c.get(
@@ -467,9 +442,9 @@ with tab1:
               row["Nom"],
               row["Extension"],
               row["Numéro"],
-              row["Finition"],
+              row["Rareté"],
+              row["Coût"],
               row["Langue"],
-              batch_cond,
               batch_loc,
               1,
               url,
@@ -563,11 +538,12 @@ with tab2:
 
           with c_details:
             st.markdown(
-                f"📍 `{row.get('Emplacement', 'N/A')}` |"
-                f" `{row.get('État', 'NM')}`"
+                f"📍 `{row.get('Emplacement', 'N/A')}` | Coût :"
+                f" `{row.get('Coût', 'N/A')}`"
             )
             st.caption(
-                f"{row.get('Finition', 'Normal')} • {row.get('Langue', 'FR')}"
+                f"Rareté : {row.get('Rareté', 'N/A')} •"
+                f" {row.get('Langue', 'FR')}"
             )
 
           with c_qty:
@@ -596,7 +572,7 @@ with tab2:
           with c_link:
             st.markdown(
                 f"<br><a href='{row['Lien Cardmarket']}' target='_blank'>↗"
-                " Prix</a>",
+                " Voir</a>",
                 unsafe_allow_html=True,
             )
 
