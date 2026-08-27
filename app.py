@@ -204,8 +204,8 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
 def analyze_card_image_groq_cached(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-  prompt = """
-    Identifie cette carte TCG et génère l'objet JSON suivant :
+  prompt = """/no_think
+    Identifie cette carte TCG et génère STRICTEMENT l'objet JSON suivant :
     {
       "game_name": "Nom du jeu",
       "card_name": "Nom de la carte",
@@ -223,9 +223,9 @@ def analyze_card_image_groq_cached(image_bytes):
           {
               "role": "system",
               "content": (
-                  "Tu es un extracteur de données TCG automatisé. Tu réponds"
-                  " EXCLUSIVEMENT au format JSON. NE FAIS AUCUNE RÉFLEXION, N'ÉCRIS"
-                  " PAS DE BALISE <think> ET AUCUN TEXTE D'EXPLICATION."
+                  "/no_think Tu es un extracteur JSON TCG automatisé. N'utilise"
+                  " aucune réflexion ou balise <think>. Réponds uniquement par"
+                  " le bloc JSON."
               ),
           },
           {
@@ -242,8 +242,9 @@ def analyze_card_image_groq_cached(image_bytes):
           },
       ],
       model="qwen/qwen3.6-27b",
-      max_tokens=4096,
+      max_tokens=2048,
       temperature=0.0,
+      extra_body={"reasoning_format": "hidden"},
   )
 
   raw_text = chat_completion.choices[0].message.content
@@ -257,7 +258,7 @@ def analyze_card_image_groq_cached(image_bytes):
   if json_match_raw:
     return json.loads(json_match_raw.group())
 
-  raise ValueError(f"Impossible d'extraire le JSON : {raw_text}")
+  raise ValueError(f"Impossible d'extraire le JSON : {raw_text[:200]}")
 
 
 # ---------------------------------------------------------
@@ -298,9 +299,9 @@ with tab1:
           card = analyze_card_image_groq_cached(image_bytes)
 
         st.markdown("---")
-        st.subheader("✏️ Vérifier et corriger les informations")
+        st.subheader("✏️ Vérifier et corriger les informations scannées")
 
-        # Formulaire avec champs pré-remplis éditables
+        # Formulaire avec champs éditables avant envoi dans Google Sheets
         with st.form("single_add_form"):
           col1, col2, col3 = st.columns(3)
 
@@ -356,7 +357,6 @@ with tab1:
           submit_button = st.form_submit_button("⚡ Ajouter au stock")
 
           if submit_button:
-            # Génération dynamique du lien d'après les saisies corrigées
             cardmarket_url = build_cardmarket_url(
                 card.get("cardmarket_slug", edit_game_name),
                 f"{edit_card_name} {edit_set_name}",
@@ -449,7 +449,6 @@ with tab1:
         })
 
       batch_df = pd.DataFrame(batch_data)
-      # Tableau interactif permettant la modification directe
       edited_df = st.data_editor(
           batch_df, use_container_width=True, num_rows="dynamic"
       )
