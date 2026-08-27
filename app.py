@@ -242,13 +242,15 @@ def analyze_card_image_groq_cached(image_bytes):
           },
       ],
       model="qwen/qwen3.6-27b",
-      max_tokens=4096,
+      max_tokens=8192,  # marge augmentée par sécurité
       temperature=0.0,
+      reasoning_format="hidden",  # ne renvoie que la réponse finale, pas le <think>
+      reasoning_effort="none",    # désactive le raisonnement, inutile pour cette tâche d'extraction
   )
 
   raw_text = chat_completion.choices[0].message.content
 
-  # Nettoyage de la réponse
+  # Nettoyage de la réponse (gardé en filet de sécurité)
   clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
   clean_text = re.sub(r"```json\s*", "", clean_text)
   clean_text = re.sub(r"```\s*", "", clean_text).strip()
