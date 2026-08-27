@@ -192,6 +192,17 @@ def render_kpi(label: str, value: str, icon: str = ""):
     """
 
 
+def resize_image_for_api(pil_image: Image.Image, max_dimension: int = 1024) -> Image.Image:
+  """Redimensionne l'image pour limiter le coût en tokens côté API (le nombre
+  de tokens d'une image dépend de sa résolution)."""
+  width, height = pil_image.size
+  if max(width, height) <= max_dimension:
+    return pil_image
+  scale = max_dimension / max(width, height)
+  new_size = (int(width * scale), int(height * scale))
+  return pil_image.resize(new_size, Image.LANCZOS)
+
+
 def build_cardmarket_url(slug: str, search_term: str) -> str:
   clean_slug = slug.strip().split("/")[0] if slug else "Pokemon"
   clean_term = re.sub(r"[\-\/,\.:#]", " ", search_term)
@@ -242,7 +253,7 @@ def analyze_card_image_groq_cached(image_bytes):
           },
       ],
       model="qwen/qwen3.6-27b",
-      max_tokens=8192,  # marge augmentée par sécurité
+      max_tokens=1024,  # suffisant pour un JSON court, raisonnement désactivé
       temperature=0.0,
       reasoning_format="hidden",  # ne renvoie que la réponse finale, pas le <think>
       reasoning_effort="none",    # désactive le raisonnement, inutile pour cette tâche d'extraction
@@ -302,8 +313,9 @@ with tab1:
 
     if image_input:
       pil_image = Image.open(image_input).convert("RGB")
+      pil_image = resize_image_for_api(pil_image)
       img_byte_arr = io.BytesIO()
-      pil_image.save(img_byte_arr, format="JPEG")
+      pil_image.save(img_byte_arr, format="JPEG", quality=85)
       image_bytes = img_byte_arr.getvalue()
 
       try:
@@ -396,8 +408,9 @@ with tab1:
 
         for idx, file in enumerate(uploaded_files):
           pil_img = Image.open(file).convert("RGB")
+          pil_img = resize_image_for_api(pil_img)
           img_byte_arr = io.BytesIO()
-          pil_img.save(img_byte_arr, format="JPEG")
+          pil_img.save(img_byte_arr, format="JPEG", quality=85)
 
           try:
             parsed_card = analyze_card_image_groq_cached(
