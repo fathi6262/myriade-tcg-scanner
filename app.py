@@ -193,7 +193,7 @@ def render_kpi(label: str, value: str, icon: str = ""):
 
 
 def build_cardmarket_url(slug: str, search_term: str) -> str:
-  clean_slug = slug.strip().split("/")[0]
+  clean_slug = slug.strip().split("/")[0] if slug else "Pokemon"
   clean_term = re.sub(r"[\-\/,\.:#]", " ", search_term)
   clean_term = " ".join(clean_term.split())
   search_query = urllib.parse.quote(clean_term)
@@ -211,11 +211,10 @@ def analyze_card_image_groq_cached(image_bytes):
       "card_name": "Nom de la carte",
       "set_name": "Nom extension",
       "card_number": "Numéro carte",
-      "cardmarket_slug": "Nom du jeu",
+      "cardmarket_slug": "Nom du jeu en un mot",
       "cardmarket_search_term": "Nom carte et extension",
       "language": "FR",
-      "is_foil": "Normal",
-      "estimated_price_eur": 2.50
+      "is_foil": "Normal"
     }
     """
 
@@ -295,40 +294,48 @@ with tab1:
       image_bytes = img_byte_arr.getvalue()
 
       try:
-        with st.spinner("Analyse visuelle en cours par Groq..."):
+        with st.spinner("Analyse visuelle par Groq..."):
           card = analyze_card_image_groq_cached(image_bytes)
 
         st.markdown("---")
-        st.subheader(f"🔮 {card.get('card_name', 'Carte inconnue')}")
+        st.subheader("✏️ Vérifier et corriger les informations")
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-          st.markdown(f"**Jeu :** `{card.get('game_name', 'N/A')}`")
-          st.markdown(f"**Extension :** {card.get('set_name', 'N/A')}")
-        with col2:
-          st.markdown(f"**Numéro :** {card.get('card_number', 'N/A')}")
-          st.markdown(f"**Langue :** {card.get('language', 'FR')}")
-        with col3:
-          st.markdown(f"**Finition :** {card.get('is_foil', 'Normal')}")
-          price = float(card.get("estimated_price_eur", 0.0))
-          st.markdown(f"**Cote est. :** ~{price:.2f} €")
-
-        cardmarket_url = build_cardmarket_url(
-            card.get("cardmarket_slug", "Pokemon"),
-            card.get("cardmarket_search_term", card.get("card_name", "")),
-        )
-        st.markdown(
-            f'<p style="margin-top: 5px;"><a href="{cardmarket_url}"'
-            ' target="_blank">↗ Voir la cote Cardmarket</a></p>',
-            unsafe_allow_html=True,
-        )
-
+        # Formulaire avec champs pré-remplis éditables
         with st.form("single_add_form"):
-          c_qty, c_cond, c_loc = st.columns(3)
-          with c_qty:
-            quantite = st.number_input("Quantité", min_value=1, value=1, step=1)
-          with c_cond:
-            condition = st.selectbox(
+          col1, col2, col3 = st.columns(3)
+
+          with col1:
+            edit_game_name = st.text_input(
+                "Jeu", value=card.get("game_name", "")
+            )
+            edit_card_name = st.text_input(
+                "Nom de la carte", value=card.get("card_name", "")
+            )
+            edit_set_name = st.text_input(
+                "Extension", value=card.get("set_name", "")
+            )
+
+          with col2:
+            edit_card_number = st.text_input(
+                "Numéro de carte", value=card.get("card_number", "")
+            )
+            edit_language = st.text_input(
+                "Langue", value=card.get("language", "FR")
+            )
+
+            foil_options = ["Normal", "Holo/Foil", "Reverse"]
+            default_foil = card.get("is_foil", "Normal")
+            foil_idx = (
+                foil_options.index(default_foil)
+                if default_foil in foil_options
+                else 0
+            )
+            edit_is_foil = st.selectbox(
+                "Finition", foil_options, index=foil_idx
+            )
+
+          with col3:
+            edit_condition = st.selectbox(
                 "État",
                 [
                     "Near Mint (NM)",
@@ -338,28 +345,38 @@ with tab1:
                     "Played (PL)",
                 ],
             )
-          with c_loc:
-            emplacement = st.text_input(
+            edit_emplacement = st.text_input(
                 "Emplacement physique", value="Classeur 1"
             )
+            edit_quantite = st.number_input(
+                "Quantité", min_value=1, value=1, step=1
+            )
 
-          if st.form_submit_button("⚡ Ajouter au stock"):
+          st.markdown("<br>", unsafe_allow_html=True)
+          submit_button = st.form_submit_button("⚡ Ajouter au stock")
+
+          if submit_button:
+            # Génération dynamique du lien d'après les saisies corrigées
+            cardmarket_url = build_cardmarket_url(
+                card.get("cardmarket_slug", edit_game_name),
+                f"{edit_card_name} {edit_set_name}",
+            )
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
             sheet.append_row([
                 date_str,
-                card.get("game_name", ""),
-                card.get("card_name", ""),
-                card.get("set_name", ""),
-                card.get("card_number", ""),
-                card.get("is_foil", "Normal"),
-                card.get("language", "FR"),
-                condition,
-                emplacement,
-                quantite,
-                price,
+                edit_game_name,
+                edit_card_name,
+                edit_set_name,
+                edit_card_number,
+                edit_is_foil,
+                edit_language,
+                edit_condition,
+                edit_emplacement,
+                edit_quantite,
                 cardmarket_url,
             ])
-            st.success(f"✅ {card.get('card_name')} enregistré avec succès !")
+            st.success(f"✅ {edit_card_name} enregistré avec succès !")
 
       except Exception as e:
         st.error(f"⚠️ Erreur d'analyse : {e}")
@@ -411,14 +428,13 @@ with tab1:
         st.success("Analyse du lot terminée !")
 
     if "batch_results" in st.session_state and st.session_state["batch_results"]:
-      st.markdown("### 📋 Récapitulatif du lot")
+      st.markdown(
+          "### 📋 Récapitulatif du lot (Double-clique sur une case pour la"
+          " modifier)"
+      )
 
       batch_data = []
       for c in st.session_state["batch_results"]:
-        url = build_cardmarket_url(
-            c.get("cardmarket_slug", "Pokemon"),
-            c.get("cardmarket_search_term", c.get("card_name", "")),
-        )
         batch_data.append({
             "Jeu": c.get("game_name", ""),
             "Nom": c.get("card_name", ""),
@@ -426,29 +442,39 @@ with tab1:
             "Numéro": c.get("card_number", ""),
             "Finition": c.get("is_foil", "Normal"),
             "Langue": c.get("language", "FR"),
-            "Prix Est. (€)": c.get("estimated_price_eur", 0.0),
-            "URL": url,
+            "Slug Cardmarket": c.get("cardmarket_slug", "Pokemon"),
+            "Terme Recherche": c.get(
+                "cardmarket_search_term", c.get("card_name", "")
+            ),
         })
 
       batch_df = pd.DataFrame(batch_data)
-      st.dataframe(batch_df, use_container_width=True)
+      # Tableau interactif permettant la modification directe
+      edited_df = st.data_editor(
+          batch_df, use_container_width=True, num_rows="dynamic"
+      )
 
       if st.button("💾 Tout valider dans Google Sheets"):
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        rows_to_add = [[
-            date_str,
-            item["Jeu"],
-            item["Nom"],
-            item["Extension"],
-            item["Numéro"],
-            item["Finition"],
-            item["Langue"],
-            batch_cond,
-            batch_loc,
-            1,
-            item["Prix Est. (€)"],
-            item["URL"],
-        ] for item in batch_data]
+        rows_to_add = []
+
+        for _, row in edited_df.iterrows():
+          url = build_cardmarket_url(
+              row["Slug Cardmarket"], row["Terme Recherche"]
+          )
+          rows_to_add.append([
+              date_str,
+              row["Jeu"],
+              row["Nom"],
+              row["Extension"],
+              row["Numéro"],
+              row["Finition"],
+              row["Langue"],
+              batch_cond,
+              batch_loc,
+              1,
+              url,
+          ])
 
         sheet.append_rows(rows_to_add)
         st.success("✅ Lot ajouté au stock en une fraction de seconde !")
@@ -466,12 +492,8 @@ with tab2:
       df["Quantité"] = (
           pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
       )
-      df["Prix Est. (€)"] = pd.to_numeric(
-          df.get("Prix Est. (€)", 0), errors="coerce"
-      ).fillna(0.0)
-      df["Valeur Totale (€)"] = df["Quantité"] * df["Prix Est. (€)"]
 
-      col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+      col_m1, col_m2, col_m3 = st.columns(3)
       with col_m1:
         st.markdown(
             render_kpi("Références", str(len(df)), "🎴"), unsafe_allow_html=True
@@ -484,13 +506,6 @@ with tab2:
             unsafe_allow_html=True,
         )
       with col_m3:
-        st.markdown(
-            render_kpi(
-                "Valeur Estimée", f"{df['Valeur Totale (€)'].sum():.2f} €", "💎"
-            ),
-            unsafe_allow_html=True,
-        )
-      with col_m4:
         st.markdown(
             render_kpi(
                 "Jeux en Stock",
@@ -553,8 +568,7 @@ with tab2:
                 f" `{row.get('État', 'NM')}`"
             )
             st.caption(
-                f"{row.get('Finition', 'Normal')} • {row.get('Langue', 'FR')} •"
-                f" ~{row.get('Prix Est. (€)', 0):.2f} €"
+                f"{row.get('Finition', 'Normal')} • {row.get('Langue', 'FR')}"
             )
 
           with c_qty:
@@ -564,7 +578,7 @@ with tab2:
             b1, b2, b3 = st.columns(3)
             if b1.button("➕", key=f"add_{idx}"):
               df.loc[idx, "Quantité"] += 1
-              update_sheet_data(df.drop(columns=["Valeur Totale (€)"]))
+              update_sheet_data(df)
               st.rerun()
 
             if b2.button("➖", key=f"sub_{idx}"):
@@ -572,12 +586,12 @@ with tab2:
                 df.loc[idx, "Quantité"] -= 1
               else:
                 df = df.drop(idx)
-              update_sheet_data(df.drop(columns=["Valeur Totale (€)"]))
+              update_sheet_data(df)
               st.rerun()
 
             if b3.button("🗑️", key=f"del_{idx}"):
               df = df.drop(idx)
-              update_sheet_data(df.drop(columns=["Valeur Totale (€)"]))
+              update_sheet_data(df)
               st.rerun()
 
           with c_link:
