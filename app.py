@@ -212,24 +212,24 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
-# STEP 1 : IA VISION (IDENTIFICATION BRUTE UNIQUEMENT)
+# STEP 1 : DÉDUCTION DU NOM ET DU COÛT EN MANA DEPUIS L'IMAGE
 @st.cache_data(show_spinner=False)
 def identify_card_visually(image_bytes):
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
   prompt = """
-    Identifie l'identité visuelle de cette carte TCG, sans te préoccuper de la disposition ou de la localisation des éléments sur l'image.
-
-    Extrais uniquement :
-    - "game_name": Nom du jeu (ex: Pokémon, Magic, Disney Lorcana, One Piece Card Game, Riftbound, Yu-Gi-Oh!).
-    - "card_name": Nom exact du personnage ou titre principal de la carte.
-    - "language": Langue du texte principal ("FR", "EN", "JP", "DE").
-    - "printed_code_line": Tout code brut ou numéro aperçu n'importe où sur la carte (ex: "SFO 227/227", "OP01-120", "SV03 199/165").
+    Exécute une analyse visuelle ciblée de la carte :
+    1. "game_name": Nom du jeu de cartes (ex: Pokémon, Magic, Lorcana, One Piece Card Game, Riftbound, Yu-Gi-Oh!).
+    2. "card_name": Nom exact du personnage ou de la carte.
+    3. "play_cost": Lis directement le chiffre du coût en mana/ressource/énergie (situé généralement en haut à gauche ou à droite dans une gemme/symbole).
+    4. "language": Langue du texte principal ("FR", "EN", "JP", "DE").
+    5. "printed_code_line": Recopie tout texte/code/numéro aperçu en bas de carte pour aider la recherche web.
 
     Génère STRICTEMENT cet objet JSON :
     {
       "game_name": "",
       "card_name": "",
+      "play_cost": "",
       "language": "FR",
       "printed_code_line": ""
     }
@@ -240,9 +240,9 @@ def identify_card_visually(image_bytes):
           {
               "role": "system",
               "content": (
-                  "Tu es un identificateur de cartes TCG. Tu reconnais l'identité"
-                  " de la carte à partir du visuel sans analyser sa mise en page."
-                  " Tu réponds EXCLUSIVEMENT avec un objet JSON valide."
+                  "Tu es un lecteur d'images TCG. Tu identifies le nom et le"
+                  " coût en mana en haut de la carte. Réponds EXCLUSIVEMENT par"
+                  " un objet JSON valide sans aucune balise <think>."
               ),
           },
           {
@@ -280,7 +280,7 @@ def identify_card_visually(image_bytes):
   raise ValueError(f"Identification visuelle impossible : {raw_text[:200]}")
 
 
-# STEP 2A : API JUSTTCG (BASE STRUCTURÉE)
+# STEP 2A : BASE DE DONNÉES STRUCTURÉE JUSTTCG
 @st.cache_data(show_spinner=False)
 def fetch_card_details_from_justtcg(game_name: str, card_name: str):
   api_key = st.secrets.get("JUSTTCG_API_KEY")
@@ -321,25 +321,25 @@ def fetch_card_details_from_justtcg(game_name: str, card_name: str):
   return details
 
 
-# STEP 2B : RECHERCHE WEB DUO GROQ / CARDMARKET
+# STEP 2B : RECHERCHE WEB DU NUMÉRO EXACT & METADONNÉES
 @st.cache_data(show_spinner=False)
 def fetch_precise_card_details_from_web(
     game_name: str, card_name: str, printed_code_line: str = ""
 ):
-  query = (
-      f"Recherche les données officielles de la carte TCG : Jeu « {game_name} », Carte « {card_name} »"
-      + (f", Code/Texte brut « {printed_code_line} »" if printed_code_line else "")
-      + ".\n\n"
-      "Retrouve sur le web / Cardmarket les informations exactes :\n"
-      "- set_name: Nom ou code officiel de l'extension\n"
-      "- card_number: Numéro complet (garder la fraction XXX/YYY si existante)\n"
-      "- rarity: Rareté officielle en français\n"
-      "- play_cost: Coût en ressources/mana/énergie\n"
-      "- cardmarket_slug: Nom de la catégorie du jeu sur Cardmarket en 1 mot sans espace (ex: Pokemon, Magic, Lorcana, OnePiece, YuGiOh)\n"
-      "- cardmarket_search_term: Termes de recherche pour Cardmarket (Nom + Extension)\n\n"
-      "Réponds UNIQUEMENT sous la forme d'un objet JSON strict :\n"
-      '{"set_name": "", "card_number": "", "rarity": "", "play_cost": "", "cardmarket_slug": "", "cardmarket_search_term": ""}'
-  )
+  query = f"""Recherche sur le web et Cardmarket les métadonnées officielles de cette carte :
+Jeu : « {game_name} »
+Carte : « {card_name} »
+Code ou indice imprimé : « {printed_code_line} »
+
+Consignes strictes :
+- "card_number": Retrouve le numéro de carte officiel EXACT. Si la carte comporte un dénominateur (ex: 227/227, 199/165), CONSERVE IMPÉRATIVEMENT la fraction complète.
+- "set_name": Code ou nom officiel complet de l'extension.
+- "rarity": Rareté officielle en français.
+- "cardmarket_slug": Nom de la catégorie du jeu sur Cardmarket en 1 mot (ex: Pokemon, Magic, Lorcana, OnePiece, YuGiOh).
+- "cardmarket_search_term": Terme exact pour chercher la carte sur Cardmarket (Nom + Extension).
+
+Réponds UNIQUEMENT sous la forme d'un objet JSON strict :
+{{"card_number": "", "set_name": "", "rarity": "", "cardmarket_slug": "", "cardmarket_search_term": ""}}"""
 
   try:
     completion = groq_client.chat.completions.create(
@@ -358,34 +358,38 @@ def fetch_precise_card_details_from_web(
   return {}
 
 
-# MOTEUR COMPLET D'ENRICHISSEMENT
+# MOTEUR DE FUSION ET D'ENRICHISSEMENT
 def process_full_card_data(image_bytes):
-  # 1. Identification visuelle brute
+  # 1. Identification du nom et déduction directe du coût en mana par l'image
   visual_info = identify_card_visually(image_bytes)
 
   game_name = visual_info.get("game_name", "")
   card_name = visual_info.get("card_name", "")
+  play_cost = visual_info.get("play_cost", "")
   printed_code = visual_info.get("printed_code_line", "")
 
   # 2. Interrogation JustTCG
   justtcg_data = fetch_card_details_from_justtcg(game_name, card_name)
 
-  # 3. Interrogation Web & Cardmarket
+  # 3. Recherche Web du numéro exact et de l'extension
   web_data = fetch_precise_card_details_from_web(
       game_name, card_name, printed_code
   )
 
-  # 4. Assemblage final
+  # 4. Assemblage : la recherche web fournit le numéro de carte officiel complet
+  card_number = (
+      web_data.get("card_number")
+      or justtcg_data.get("card_number")
+      or printed_code
+  )
   set_name = (
-      justtcg_data.get("set_name")
-      or web_data.get("set_name")
-      or visual_info.get("printed_code_line", "")
+      web_data.get("set_name")
+      or justtcg_data.get("set_name")
+      or printed_code
   )
   rarity = (
-      justtcg_data.get("rarity") or web_data.get("rarity") or "Non spécifiée"
+      web_data.get("rarity") or justtcg_data.get("rarity") or "Non spécifiée"
   )
-  card_number = web_data.get("card_number") or printed_code
-  play_cost = web_data.get("play_cost", "")
   slug = web_data.get("cardmarket_slug") or game_name
   search_term = web_data.get(
       "cardmarket_search_term", f"{card_name} {set_name}"
@@ -440,7 +444,7 @@ with tab1:
 
       try:
         with st.spinner(
-            "Identification visuelle & recherche des données officielles..."
+            "Analyse de l'image & recherche du numéro officiel sur le web..."
         ):
           card = process_full_card_data(image_bytes)
 
