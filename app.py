@@ -224,9 +224,8 @@ def analyze_card_image_groq_cached(image_bytes):
           {
               "role": "system",
               "content": (
-                  "Tu es une API JSON brute. Réponds EXCLUSIVEMENT avec un objet"
-                  " JSON valide. N'utilise jamais de balises <think> ni de"
-                  " blocs ```json."
+                  "Tu es un processeur d'images TCG. Génère directement le JSON"
+                  " en fin de réponse."
               ),
           },
           {
@@ -243,18 +242,18 @@ def analyze_card_image_groq_cached(image_bytes):
           },
       ],
       model="qwen/qwen3.6-27b",
-      max_tokens=1024,
-      temperature=0.1,
+      max_tokens=4096,
+      temperature=0.0,
   )
 
   raw_text = chat_completion.choices[0].message.content
 
-  # Nettoyage des balises <think>, des blocs de code ```json et du texte inutile
+  # Nettoyage de la réponse
   clean_text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL)
   clean_text = re.sub(r"```json\s*", "", clean_text)
   clean_text = re.sub(r"```\s*", "", clean_text).strip()
 
-  # Extraction du bloc JSON entre { et }
+  # Extraction de l'objet JSON
   json_match = re.search(r"\{.*\}", clean_text, re.DOTALL)
   if json_match:
     try:
@@ -262,7 +261,14 @@ def analyze_card_image_groq_cached(image_bytes):
     except json.JSONDecodeError:
       pass
 
-  raise ValueError(f"Format JSON invalide reçu : {raw_text[:150]}")
+  json_match_raw = re.search(r"\{.*\}", raw_text, re.DOTALL)
+  if json_match_raw:
+    try:
+      return json.loads(json_match_raw.group())
+    except json.JSONDecodeError:
+      pass
+
+  raise ValueError(f"Format JSON invalide reçu : {raw_text[:200]}")
 
 
 # ---------------------------------------------------------
