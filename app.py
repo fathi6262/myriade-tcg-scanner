@@ -221,9 +221,9 @@ def analyze_card_image_groq_cached(image_bytes):
       "printed_code_line": "Le petit code imprimé sur la carte, transcrit tel quel",
       "game_name": "Nom du jeu",
       "card_name": "Nom de la carte",
-      "set_name": "Code d'extension",
-      "card_number": "Numéro tel qu'imprimé",
-      "rarity": "Rareté",
+      "set_name": "Code d'extension (best-effort, vérifié ensuite via le web)",
+      "card_number": "Numéro tel qu'imprimé (best-effort, vérifié ensuite via le web)",
+      "rarity": "Rareté (best-effort, vérifiée ensuite via le web)",
       "play_cost": "Coût de la carte",
       "cardmarket_slug": "Nom du jeu en un mot",
       "cardmarket_search_term": "Nom carte et extension",
@@ -315,48 +315,69 @@ def analyze_card_image_groq_cached(image_bytes):
 
 
 @st.cache_data(show_spinner=False)
-def fetch_rarity_from_web(
+def fetch_precise_card_details_from_web(
     game_name: str,
     card_name: str,
-    set_name: str,
-    card_number: str,
+    rough_set_hint: str = "",
+    rough_number_hint: str = "",
     printed_code_line: str = "",
 ):
-  """Recherche la rareté réelle de la carte sur le web via Groq Compound
-  (recherche web intégrée, propulsée par Tavily), plutôt que de la déduire
-  visuellement. Retourne None en cas d'échec (réseau, quota, réponse
-  ambiguë) pour permettre un repli silencieux sur la valeur du scan visuel."""
-  code_hint = (
-      f" Le code imprimé sur la carte est : « {printed_code_line} »."
-      if printed_code_line
+  """Utilise Groq Compound (recherche web intégrée, propulsée par Tavily)
+  pour retrouver l'extension, le numéro et la rareté officiels d'une carte,
+  en appliquant les conventions propres au jeu identifié plutôt que des
+  règles codées en dur pour chaque TCG. Les valeurs issues du scan visuel
+  ne sont transmises que comme indices à vérifier, pas comme vérités.
+  Retourne un dict partiel (clés absentes si non trouvées avec confiance) ;
+  ne lève jamais d'exception — un échec renvoie {} et l'appelant garde les
+  valeurs du scan visuel."""
+  hints = []
+  if rough_set_hint:
+    hints.append(f"extension possible d'après le scan : « {rough_set_hint} »")
+  if rough_number_hint:
+    hints.append(f"numéro possible d'après le scan : « {rough_number_hint} »")
+  if printed_code_line:
+    hints.append(f"code compact repéré sur la carte : « {printed_code_line} »")
+  hints_text = (
+      " Indices du scan visuel, à vérifier et corriger si besoin (ils"
+      f" peuvent être faux) : {' ; '.join(hints)}."
+      if hints
       else ""
   )
+
   query = (
-      "Recherche sur le web la rareté officielle exacte de cette carte à"
-      f" jouer : jeu « {game_name} », carte « {card_name} », extension «"
-      f" {set_name} », numéro {card_number}.{code_hint} Réponds uniquement"
-      " par le nom de la rareté en un ou deux mots (ex: Commune, Peu"
-      " Commune, Rare, Super Rare, Secrète, Épique, Légendaire, Champion,"
-      " Mythique), sans phrase ni explication. Si tu ne trouves pas"
-      " d'information fiable, réponds exactement : INCONNU."
+      "Recherche sur le web les informations officielles précises de cette"
+      f" carte à jouer : jeu « {game_name} », carte « {card_name} »."
+      f"{hints_text} Chaque TCG a ses propres conventions pour le format du"
+      " numéro de carte et pour le système de rareté (les libellés, les"
+      " abréviations, la présence ou non d'un total après un « / ») : ne"
+      " suppose rien, applique les conventions réelles du jeu identifié"
+      " ci-dessus telles que tu les trouves sur le web.\n\n"
+      "Réponds UNIQUEMENT avec un objet JSON strict, sans aucun texte"
+      " avant ou après, au format exact :\n"
+      '{"set_name": "code ou nom d\'extension officiel",'
+      ' "card_number": "numéro exact, écrit selon la convention du jeu",'
+      ' "rarity": "nom complet de la rareté, en français"}\n\n'
+      "Si une information reste introuvable malgré la recherche, mets une"
+      ' chaîne vide "" pour ce champ plutôt que de deviner.'
   )
 
   try:
     completion = groq_client.chat.completions.create(
-        model="groq/compound-mini",
+        model="groq/compound",
         messages=[{"role": "user", "content": query}],
         temperature=0.0,
-        max_tokens=50,
+        max_tokens=300,
     )
-    answer = completion.choices[0].message.content.strip()
-    answer = answer.strip(" .\n\"'")
-
-    if not answer or answer.upper() == "INCONNU" or len(answer) > 40:
-      return None
-    return answer
+    raw_text = completion.choices[0].message.content.strip()
+    json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+    if not json_match:
+      return {}
+    result = json.loads(json_match.group())
+    # On ne garde que les champs non vides renvoyés par la recherche
+    return {k: v for k, v in result.items() if isinstance(v, str) and v.strip()}
   except Exception:
-    # Recherche web best-effort : en cas d'échec on garde la valeur du scan visuel
-    return None
+    # Recherche web best-effort : en cas d'échec on garde les valeurs du scan visuel
+    return {}
 
 
 # ---------------------------------------------------------
@@ -397,16 +418,15 @@ with tab1:
         with st.spinner("Analyse visuelle par Groq..."):
           card = analyze_card_image_groq_cached(image_bytes)
 
-        with st.spinner("Vérification de la rareté sur le web..."):
-          web_rarity = fetch_rarity_from_web(
+        with st.spinner("Vérification de l'extension, du numéro et de la rareté sur le web..."):
+          verified_fields = fetch_precise_card_details_from_web(
               card.get("game_name", ""),
               card.get("card_name", ""),
               card.get("set_name", ""),
               card.get("card_number", ""),
               card.get("printed_code_line", ""),
           )
-          if web_rarity:
-            card["rarity"] = web_rarity
+          card.update(verified_fields)
 
         st.markdown("---")
         st.subheader("✏️ Vérifier et corriger les informations scannées")
@@ -502,15 +522,14 @@ with tab1:
             parsed_card = analyze_card_image_groq_cached(
                 img_byte_arr.getvalue()
             )
-            web_rarity = fetch_rarity_from_web(
+            verified_fields = fetch_precise_card_details_from_web(
                 parsed_card.get("game_name", ""),
                 parsed_card.get("card_name", ""),
                 parsed_card.get("set_name", ""),
                 parsed_card.get("card_number", ""),
                 parsed_card.get("printed_code_line", ""),
             )
-            if web_rarity:
-              parsed_card["rarity"] = web_rarity
+            parsed_card.update(verified_fields)
             analyzed_cards.append(parsed_card)
           except Exception as e:
             st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
