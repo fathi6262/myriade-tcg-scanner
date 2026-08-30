@@ -7,3 +7,4 @@ pandas
 groq
 google-generativeai
 Pillow
+requests
