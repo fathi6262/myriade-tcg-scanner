@@ -158,7 +158,7 @@ SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 @st.cache_resource
 def get_gemini_model():
   genai.configure(api_key=st.secrets["GEMINI_API_KEY"].strip())
-  return genai.GenerativeModel("gemini-3.5-flash-lite") # Correction du modèle
+  return genai.GenerativeModel("gemini-3.5-flash-lite")
 
 
 @st.cache_resource
@@ -176,7 +176,7 @@ sheet = get_google_sheet()
 
 
 # ---------------------------------------------------------
-# 3. FONCTIONS UTILITAIRES ET ANALYSE GEMINI
+# 3. FONCTIONS UTILITAIRES ET API TIERCE
 # ---------------------------------------------------------
 def update_sheet_data(dataframe):
   sheet.clear()
@@ -204,15 +204,10 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def fetch_riftbound_card_from_riftcodex(card_name: str):
-  """
-  Interroge l'API publique REST de Riftcodex (api.riftcodex.com) 
-  qui centralise les données officielles pour Riftbound.
-  """
+  """ API Publique pour Riftbound (api.riftcodex.com) """
   if not card_name:
     return {}
-  
   try:
-    # L'API Riftcodex ne requiert pas d'authentification pour la lecture
     response = requests.get(
         "https://api.riftcodex.com/api/cards",
         params={"q": card_name, "limit": 5},
@@ -227,7 +222,6 @@ def fetch_riftbound_card_from_riftcodex(card_name: str):
   if not results:
     return {}
 
-  # Filtrage pour trouver la carte correspondante (insensible à la casse)
   card_name_lower = card_name.strip().lower()
   best_match = next(
       (c for c in results if c.get("name", "").strip().lower() == card_name_lower),
@@ -239,19 +233,61 @@ def fetch_riftbound_card_from_riftcodex(card_name: str):
     details["set_name"] = str(best_match["set"])
   if "rarity" in best_match:
     details["rarity"] = str(best_match["rarity"]).capitalize()
-  
-  # Le coût peut varier selon le nom de la clé (cost ou energy_cost)
   if "cost" in best_match:
     details["play_cost"] = str(best_match["cost"])
   elif "energy_cost" in best_match:
     details["play_cost"] = str(best_match["energy_cost"])
-    
   if "collector_number" in best_match:
     details["card_number"] = str(best_match["collector_number"])
   elif "number" in best_match:
     details["card_number"] = str(best_match["number"])
       
   return details
+
+
+@st.cache_data(show_spinner=False)
+def fetch_onepiece_card_from_optcgapi(card_id: str):
+  """ API Publique communautaire pour One Piece Card Game (optcgapi.com) """
+  if not card_id:
+    return {}
+  
+  # L'API a besoin de la référence propre (ex: ST21-014)
+  card_id = card_id.upper().strip().split()[0]
+  
+  # Routage selon le type de carte (Starter Deck, Promo ou Set classique)
+  if card_id.startswith("ST"):
+    url = f"https://optcgapi.com/api/decks/card/{card_id}/"
+  elif card_id.startswith("P"):
+    url = f"https://optcgapi.com/api/promos/card/{card_id}/"
+  else:
+    url = f"https://optcgapi.com/api/sets/card/{card_id}/"
+      
+  try:
+    response = requests.get(url, timeout=8)
+    response.raise_for_status()
+    data = response.json()
+    
+    # L'API peut renvoyer une liste ou un dictionnaire direct selon la route
+    if isinstance(data, list) and len(data) > 0:
+      best_match = data[0]
+    elif isinstance(data, dict):
+      best_match = data
+    else:
+      return {}
+        
+    details = {}
+    if "name" in best_match:
+      details["card_name"] = str(best_match["name"])
+    if "set_name" in best_match:
+      details["set_name"] = str(best_match["set_name"])
+    if "rarity" in best_match:
+      details["rarity"] = str(best_match["rarity"])
+    if "cost" in best_match:
+      details["play_cost"] = str(best_match["cost"])
+        
+    return details
+  except Exception:
+    return {}
 
 
 @st.cache_data(show_spinner=False)
@@ -321,14 +357,22 @@ with tab1:
         with st.spinner("Analyse visuelle haute précision par Gemini..."):
           card = analyze_card_gemini_cached(image_bytes)
 
-        # --- NOUVEAU : Interrogation de l'API Riftcodex ---
-        if "riftbound" in card.get("game_name", "").lower():
+        game_lower = card.get("game_name", "").lower()
+        
+        # ROUTAGE API : RIFTBOUND
+        if "riftbound" in game_lower:
           with st.spinner("Récupération des métadonnées sur Riftcodex..."):
             riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""))
-            
-            # On écrase les champs avec la vraie data de l'API
             card.update({k: v for k, v in riftcodex_data.items() if v})
             card["cardmarket_slug"] = "Riftbound"
+            card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
+
+        # ROUTAGE API : ONE PIECE
+        elif "one piece" in game_lower:
+          with st.spinner("Récupération des métadonnées sur OPTCG API..."):
+            optcg_data = fetch_onepiece_card_from_optcgapi(card.get("card_number", ""))
+            card.update({k: v for k, v in optcg_data.items() if v})
+            card["cardmarket_slug"] = "OnePiece"
             card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
 
         st.markdown("---")
@@ -350,11 +394,11 @@ with tab1:
 
           with col2:
             edit_card_number = st.text_input(
-                "Numéro de carte (ex: ST21-014)",
+                "Numéro de carte",
                 value=card.get("card_number", ""),
             )
             edit_rarity = st.text_input(
-                "Rareté", value=card.get("rarity", "Super Rare (SR)")
+                "Rareté", value=card.get("rarity", "")
             )
             edit_play_cost = st.text_input(
                 "Coût (Mana/Ressource)", value=str(card.get("play_cost", ""))
@@ -424,12 +468,20 @@ with tab1:
 
           try:
             parsed_card = analyze_card_gemini_cached(img_byte_arr.getvalue())
+            game_lower = parsed_card.get("game_name", "").lower()
             
-            # --- NOUVEAU : Interrogation de l'API Riftcodex ---
-            if "riftbound" in parsed_card.get("game_name", "").lower():
+            # ROUTAGE API : RIFTBOUND
+            if "riftbound" in game_lower:
               riftcodex_data = fetch_riftbound_card_from_riftcodex(parsed_card.get("card_name", ""))
               parsed_card.update({k: v for k, v in riftcodex_data.items() if v})
               parsed_card["cardmarket_slug"] = "Riftbound"
+              parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
+
+            # ROUTAGE API : ONE PIECE
+            elif "one piece" in game_lower:
+              optcg_data = fetch_onepiece_card_from_optcgapi(parsed_card.get("card_number", ""))
+              parsed_card.update({k: v for k, v in optcg_data.items() if v})
+              parsed_card["cardmarket_slug"] = "OnePiece"
               parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
 
             analyzed_cards.append(parsed_card)
