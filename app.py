@@ -158,8 +158,7 @@ SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 @st.cache_resource
 def get_gemini_model():
   genai.configure(api_key=st.secrets["GEMINI_API_KEY"].strip())
-  # Utilisation confirmée du modèle demandé
-  return genai.GenerativeModel("gemini-3.5-flash-lite")
+  return genai.GenerativeModel("gemini-2.5-flash") # Correction du modèle
 
 
 @st.cache_resource
@@ -177,7 +176,7 @@ sheet = get_google_sheet()
 
 
 # ---------------------------------------------------------
-# 3. FONCTIONS UTILITAIRES ET API
+# 3. FONCTIONS UTILITAIRES ET ANALYSE GEMINI
 # ---------------------------------------------------------
 def update_sheet_data(dataframe):
   sheet.clear()
@@ -206,12 +205,14 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
 @st.cache_data(show_spinner=False)
 def fetch_riftbound_card_from_riftcodex(card_name: str):
   """
-  Interroge l'API publique de Riftcodex.
+  Interroge l'API publique REST de Riftcodex (api.riftcodex.com) 
+  qui centralise les données officielles pour Riftbound.
   """
   if not card_name:
     return {}
   
   try:
+    # L'API Riftcodex ne requiert pas d'authentification pour la lecture
     response = requests.get(
         "https://api.riftcodex.com/api/cards",
         params={"q": card_name, "limit": 5},
@@ -226,7 +227,7 @@ def fetch_riftbound_card_from_riftcodex(card_name: str):
   if not results:
     return {}
 
-  # Cherche le nom exact
+  # Filtrage pour trouver la carte correspondante (insensible à la casse)
   card_name_lower = card_name.strip().lower()
   best_match = next(
       (c for c in results if c.get("name", "").strip().lower() == card_name_lower),
@@ -238,10 +239,13 @@ def fetch_riftbound_card_from_riftcodex(card_name: str):
     details["set_name"] = str(best_match["set"])
   if "rarity" in best_match:
     details["rarity"] = str(best_match["rarity"]).capitalize()
+  
+  # Le coût peut varier selon le nom de la clé (cost ou energy_cost)
   if "cost" in best_match:
     details["play_cost"] = str(best_match["cost"])
   elif "energy_cost" in best_match:
     details["play_cost"] = str(best_match["energy_cost"])
+    
   if "collector_number" in best_match:
     details["card_number"] = str(best_match["collector_number"])
   elif "number" in best_match:
@@ -259,16 +263,16 @@ def analyze_card_gemini_cached(image_bytes):
     Analyse cette photo de carte et extrait avec une précision exacte ses données officielles :
 
     1. "game_name" : Nom officiel du jeu (ex: "One Piece Card Game", "Riftbound", "Pokémon", "Magic: The Gathering", "Disney Lorcana", "Yu-Gi-Oh!").
-    2. "card_name" : Nom de la carte. Si la carte est en japonais, donne le nom anglais/romaji officiel suivi du nom japonais (ex: "Monkey D. Luffy / モンキー・D・ルフィ").
-    3. "set_name" : Nom ou code d'extension officiel imprimé (ex: "STARTER DECK EX -GEAR5- [ST-21]", "ONE PIECE magazine Vol.20 Promo", "Vendetta").
-    4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
+    2. "card_name" : Nom de la carte. Si la carte est en japonais, donne le nom anglais/romaji officiel suivi du nom japonais entre parenthèses ou slashes (ex: "Monkey D. Luffy / モンキー・D・ルフィ").
+    3. "set_name" : Nom ou code d'extension officiel (ex: "STARTER DECK EX -GEAR5- [ST-21]", "Vendetta", "ONE PIECE magazine Vol.20 Promo", "151").
+    4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227", "OP01-120"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
     5. "rarity" : Rareté officielle (ex: "Super Rare (SR)", "Rare (R)", "Épique", "Secret Rare (SEC)", "Commune (C)"). Attention : "DON!!" est le nom de la ressource, JAMAIS une rareté.
     6. "play_cost" : Le coût en mana/ressource/énergie (ex: 5, 1, 10).
     7. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
     8. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot (ex: "OnePiece", "Riftbound", "Pokemon", "Magic", "Lorcana").
     9. "cardmarket_search_term" : Termes exacts pour chercher la carte sur Cardmarket (Nom anglais + Référence, ex: "Monkey D. Luffy ST21-014").
 
-    Génère STRICTEMENT un objet JSON valide, sans formatage markdown additionnel.
+    Génère STRICTEMENT un objet JSON valide.
     """
 
   response = gemini_model.generate_content(
@@ -314,13 +318,14 @@ with tab1:
       image_bytes = img_byte_arr.getvalue()
 
       try:
-        with st.spinner("Analyse visuelle par Gemini..."):
+        with st.spinner("Analyse visuelle haute précision par Gemini..."):
           card = analyze_card_gemini_cached(image_bytes)
 
-        # SI LE JEU EST RIFTBOUND -> ON APPELLE L'API
+        # --- NOUVEAU : Interrogation de l'API Riftcodex ---
         if "riftbound" in card.get("game_name", "").lower():
-          with st.spinner("Récupération des métadonnées officielles sur Riftcodex..."):
+          with st.spinner("Récupération des métadonnées sur Riftcodex..."):
             riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""))
+            
             # On écrase les champs avec la vraie data de l'API
             card.update({k: v for k, v in riftcodex_data.items() if v})
             card["cardmarket_slug"] = "Riftbound"
@@ -345,11 +350,11 @@ with tab1:
 
           with col2:
             edit_card_number = st.text_input(
-                "Numéro de carte",
+                "Numéro de carte (ex: ST21-014)",
                 value=card.get("card_number", ""),
             )
             edit_rarity = st.text_input(
-                "Rareté", value=card.get("rarity", "")
+                "Rareté", value=card.get("rarity", "Super Rare (SR)")
             )
             edit_play_cost = st.text_input(
                 "Coût (Mana/Ressource)", value=str(card.get("play_cost", ""))
@@ -420,7 +425,7 @@ with tab1:
           try:
             parsed_card = analyze_card_gemini_cached(img_byte_arr.getvalue())
             
-            # SI LE JEU EST RIFTBOUND -> ON APPELLE L'API
+            # --- NOUVEAU : Interrogation de l'API Riftcodex ---
             if "riftbound" in parsed_card.get("game_name", "").lower():
               riftcodex_data = fetch_riftbound_card_from_riftcodex(parsed_card.get("card_name", ""))
               parsed_card.update({k: v for k, v in riftcodex_data.items() if v})
