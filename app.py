@@ -218,15 +218,37 @@ def delete_sheet_row(pandas_idx: int):
 
 # ================== FONCTIONS API TIERCES (métadonnées par jeu) ==================
 
+def _normalize_card_text(text: str) -> str:
+  """Normalise un nom de carte pour comparaison (ponctuation, espaces, casse)."""
+  text = text.strip().lower()
+  text = re.sub(r"[,\-–—'’\.]", " ", text)
+  text = re.sub(r"\s+", " ", text)
+  return text.strip()
+
+
+def _normalize_card_number(number: str) -> str:
+  """Isole la partie numérique d'un numéro de carte (ex: '113/166' -> '113', 'VEN 113' -> '113')."""
+  match = re.search(r"\d+", number or "")
+  return match.group(0) if match else ""
+
+
 @st.cache_data(show_spinner=False)
-def fetch_riftbound_card_from_riftcodex(card_name: str):
-  """API publique pour Riftbound (api.riftcodex.com)."""
+def fetch_riftbound_card_from_riftcodex(card_name: str, card_number: str = ""):
+  """API publique pour Riftbound (api.riftcodex.com).
+
+  Le matching se fait EN PRIORITÉ sur le numéro de carte (identifiant fiable
+  et sans ambiguïté), car le nom extrait par Gemini peut différer légèrement
+  du nom exact en base (ponctuation, sous-titre, casse...). Sans match fiable
+  (numéro ou nom exact/normalisé), on ne renvoie rien plutôt que de deviner
+  avec le premier résultat de la recherche — un mauvais matching peut faire
+  remonter la rareté, le coût ou le numéro d'une carte totalement différente.
+  """
   if not card_name:
     return {}
   try:
     response = requests.get(
         "https://api.riftcodex.com/api/cards",
-        params={"q": card_name, "limit": 5},
+        params={"q": card_name, "limit": 10},
         timeout=8,
     )
     response.raise_for_status()
@@ -234,11 +256,30 @@ def fetch_riftbound_card_from_riftcodex(card_name: str):
     if not results:
       return {}
 
-    card_name_lower = card_name.strip().lower()
-    best_match = next(
-        (c for c in results if c.get("name", "").strip().lower() == card_name_lower),
-        results[0],
-    )
+    best_match = None
+
+    # 1. Match par numéro de carte (le plus fiable)
+    target_number = _normalize_card_number(card_number)
+    if target_number:
+      for c in results:
+        candidate_number = _normalize_card_number(
+            str(c.get("collector_number") or c.get("number") or "")
+        )
+        if candidate_number and candidate_number == target_number:
+          best_match = c
+          break
+
+    # 2. Sinon, match par nom exact normalisé
+    if best_match is None:
+      target_name = _normalize_card_text(card_name)
+      for c in results:
+        if _normalize_card_text(c.get("name", "")) == target_name:
+          best_match = c
+          break
+
+    # 3. Aucun match fiable : on ne renvoie rien (pas de fallback au hasard)
+    if best_match is None:
+      return {}
 
     details = {}
     if "name" in best_match:
@@ -376,11 +417,15 @@ def enrich_card_data(card: dict) -> dict:
   game_lower = card.get("game_name", "").lower()
 
   if "riftbound" in game_lower:
-    riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""))
-    visual_rarity = card.get("rarity")
-    card.update({k: v for k, v in riftcodex_data.items() if v})
-    if visual_rarity and visual_rarity.lower() not in ["non spécifiée", "", "null", "none"]:
-      card["rarity"] = visual_rarity
+    riftcodex_data = fetch_riftbound_card_from_riftcodex(
+        card.get("card_name", ""), card.get("card_number", "")
+    )
+    # La rareté Riftbound provient exclusivement de l'API Riftcodex, jamais
+    # de l'estimation visuelle de Gemini (symbole en bas de carte). Si l'API
+    # ne trouve pas de correspondance fiable, on laisse la rareté vide plutôt
+    # que d'afficher une valeur potentiellement fausse.
+    card["rarity"] = riftcodex_data.get("rarity", "")
+    card.update({k: v for k, v in riftcodex_data.items() if v and k != "rarity"})
     card["cardmarket_slug"] = "Riftbound"
     card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
 
