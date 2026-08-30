@@ -71,6 +71,11 @@ st.markdown(
         backdrop-filter: blur(10px);
         transition: transform 0.2s ease, border-color 0.2s ease;
     }
+    
+    .kpi-card:hover {
+        border-color: #a855f7 !important;
+        transform: translateY(-2px);
+    }
 
     .kpi-label {
         font-size: 0.8rem !important;
@@ -257,16 +262,13 @@ def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
   """ API Publique pour Pokémon TCG (pokemontcg.io) """
   if not card_name: return {}
   try:
-    # Recherche large par nom
     clean_name = card_name.split()[0].replace("é", "e").strip()
     response = requests.get("https://api.pokemontcg.io/v2/cards", params={"q": f'name:"{clean_name}"'}, timeout=8)
     response.raise_for_status()
     results = response.json().get("data", [])
-    
     if not results: return {}
 
     best_match = results[0]
-    # On affine si Gemini a repéré le numéro (ex: "199/165" -> "199")
     if card_number:
       num_only = card_number.split("/")[0].strip()
       for r in results:
@@ -288,17 +290,14 @@ def fetch_lorcana_card_from_api(card_name: str):
   """ API Publique communautaire pour Disney Lorcana """
   if not card_name: return {}
   try:
-    clean_name = card_name.split("-")[0].strip() # Enlève le sous-titre pour la requête
+    clean_name = card_name.split("-")[0].strip()
     response = requests.get(f"https://api.lorcana-api.com/cards/fetch?search=name~{clean_name}", timeout=8)
     response.raise_for_status()
     results = response.json()
-    
     if not results or not isinstance(results, list): return {}
       
     best_match = results[0]
     details = {}
-    
-    # Reconstitution du nom complet
     full_name = str(best_match.get("Name", ""))
     if best_match.get("Subtitle"): full_name += f" - {best_match['Subtitle']}"
     if full_name: details["card_name"] = full_name
@@ -307,7 +306,6 @@ def fetch_lorcana_card_from_api(card_name: str):
     if best_match.get("Rarity"): details["rarity"] = str(best_match["Rarity"])
     if best_match.get("Cost"): details["play_cost"] = str(best_match["Cost"])
     if best_match.get("Card_Num"): details["card_number"] = str(best_match["Card_Num"])
-    
     return details
   except Exception:
     return {}
@@ -323,10 +321,18 @@ def analyze_card_gemini_cached(image_bytes):
     Analyse cette photo de carte et extrait avec une précision exacte ses données officielles :
 
     1. "game_name" : Nom officiel du jeu (ex: "One Piece Card Game", "Riftbound", "Pokémon", "Magic: The Gathering", "Disney Lorcana", "Palworld TCG", "Yu-Gi-Oh!").
-    2. "card_name" : Nom COMPLET de la carte. Tu dois inclure le titre principal ET le sous-titre s'il y en a un (ex: "Ahri, Inquisitive", "Dracaufeu ex", "Robin Hood - Unrivaled Archer"). Si la carte est en japonais, donne le nom complet anglais officiel (ex: "Monkey D. Luffy").
+    2. "card_name" : Nom COMPLET de la carte (titre principal + sous-titre).
     3. "set_name" : Nom ou code d'extension officiel imprimé.
     4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
-    5. "rarity" : Rareté officielle (ex: "Super Rare (SR)", "Rare (R)", "Épique", "Secret Rare (SEC)", "Commune (C)"). Attention : "DON!!" est le nom de la ressource, JAMAIS une rareté.
+    5. "rarity" : Rareté officielle exacte.
+       - Pour RIFTBOUND, regarde attentivement le petit symbole / symbole géométrique coloré en bas au centre/droite de la carte :
+         * Cercle / Perle nacre-blanche = Common
+         * Triangle vert / cyan = Uncommon
+         * Losange / Diamant rose / magenta = Rare
+         * Pentagone orange / flamme = Epic
+         * Hexagone jaune / doré = Overnumbered / Alternate Art
+       - Pour ONE PIECE : C, UC, R, SR, SEC, P (attention : "DON!!" est la ressource, JAMAIS la rareté).
+       - Pour d'autres jeux : Commune, Peu Commune, Rare, Épique, Légendaire, Secret Rare, Promo.
     6. "play_cost" : Le coût en mana/ressource/énergie (ex: 5, 1, 10).
     7. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
     8. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot (ex: "OnePiece", "Riftbound", "Pokemon", "Magic", "Lorcana", "Palworld").
@@ -382,14 +388,16 @@ with tab1:
           card = analyze_card_gemini_cached(image_bytes)
 
         game_lower = card.get("game_name", "").lower()
-        
-        # --- SYSTÈME DE ROUTAGE API INTELLIGENT ---
-        
+
         # 1. RIFTBOUND
         if "riftbound" in game_lower:
           with st.spinner("Récupération des métadonnées sur Riftcodex..."):
             riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""))
+            # On conserve la rareté lue visuellement si l'API ne la fournit pas clairement
+            visual_rarity = card.get("rarity")
             card.update({k: v for k, v in riftcodex_data.items() if v})
+            if visual_rarity and visual_rarity != "Non spécifiée":
+              card["rarity"] = visual_rarity
             card["cardmarket_slug"] = "Riftbound"
             card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
 
@@ -415,13 +423,12 @@ with tab1:
             lorcana_data = fetch_lorcana_card_from_api(card.get("card_name", ""))
             card.update({k: v for k, v in lorcana_data.items() if v})
             card["cardmarket_slug"] = "Lorcana"
-            # Cardmarket Lorcana utilise souvent des tirets pour les noms avec sous-titre
             card["cardmarket_search_term"] = card.get('card_name', '').replace(" - ", " ")
-            
-        # 5. PALWORLD (Automatique via Gemini car pas d'API communautaire dispo depuis sa sortie récente)
+
+        # 5. PALWORLD
         elif "palworld" in game_lower:
-            card["cardmarket_slug"] = "Palworld"
-            card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
+          card["cardmarket_slug"] = "Palworld"
+          card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
 
         st.markdown("---")
         st.subheader("✏️ Vérifier et corriger les informations obtenues")
@@ -517,11 +524,13 @@ with tab1:
           try:
             parsed_card = analyze_card_gemini_cached(img_byte_arr.getvalue())
             game_lower = parsed_card.get("game_name", "").lower()
-            
-            # --- ROUTAGE DES LOTS VERS LES API ---
+
             if "riftbound" in game_lower:
               riftcodex_data = fetch_riftbound_card_from_riftcodex(parsed_card.get("card_name", ""))
+              visual_rarity = parsed_card.get("rarity")
               parsed_card.update({k: v for k, v in riftcodex_data.items() if v})
+              if visual_rarity and visual_rarity != "Non spécifiée":
+                parsed_card["rarity"] = visual_rarity
               parsed_card["cardmarket_slug"] = "Riftbound"
               parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
 
@@ -542,11 +551,10 @@ with tab1:
               parsed_card.update({k: v for k, v in lorcana_data.items() if v})
               parsed_card["cardmarket_slug"] = "Lorcana"
               parsed_card["cardmarket_search_term"] = parsed_card.get('card_name', '').replace(" - ", " ")
-              
+
             elif "palworld" in game_lower:
               parsed_card["cardmarket_slug"] = "Palworld"
               parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
-
 
             analyzed_cards.append(parsed_card)
           except Exception as e:
