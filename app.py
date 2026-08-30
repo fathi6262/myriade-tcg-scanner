@@ -1,11 +1,10 @@
-import base64
-from datetime import datetime
 import io
 import json
 import re
 import urllib.parse
-import requests
+from datetime import datetime
 
+import requests
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 import gspread
@@ -43,7 +42,7 @@ st.markdown(
         text-transform: uppercase;
         letter-spacing: 2px;
     }
-    
+
     .brand-subtitle {
         text-align: center;
         color: #94a3b8;
@@ -71,7 +70,7 @@ st.markdown(
         backdrop-filter: blur(10px);
         transition: transform 0.2s ease, border-color 0.2s ease;
     }
-    
+
     .kpi-card:hover {
         border-color: #a855f7 !important;
         transform: translateY(-2px);
@@ -104,7 +103,7 @@ st.markdown(
         font-weight: 600 !important;
         border-radius: 8px !important;
     }
-    
+
     button[aria-selected="true"] {
         background: linear-gradient(90deg, rgba(168, 85, 247, 0.25), rgba(0, 240, 255, 0.25)) !important;
         color: #00f0ff !important;
@@ -123,7 +122,7 @@ st.markdown(
         box-shadow: 0 0 12px rgba(0, 240, 255, 0.2) !important;
         transition: all 0.2s ease !important;
     }
-    
+
     .stButton > button:hover, div[data-testid="stForm"] button:hover {
         box-shadow: 0 0 20px rgba(168, 85, 247, 0.8) !important;
         transform: translateY(-1px);
@@ -140,9 +139,7 @@ st.markdown(
 )
 
 # En-tête
-st.markdown(
-    '<div class="brand-title">✨ Myriade Games</div>', unsafe_allow_html=True
-)
+st.markdown('<div class="brand-title">✨ Myriade Games</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="brand-subtitle">Une multitude d\'univers, une seule'
     " communauté</div>",
@@ -153,6 +150,7 @@ st.markdown(
 # 2. CONFIGURATION ET CACHE DES API
 # ---------------------------------------------------------
 SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
+QTY_COL_LETTER = "J"  # colonne "Quantité" dans le Google Sheet (à ajuster si besoin)
 
 
 @st.cache_resource
@@ -178,11 +176,10 @@ sheet = get_google_sheet()
 # ---------------------------------------------------------
 # 3. FONCTIONS UTILITAIRES ET API TIERCES
 # ---------------------------------------------------------
-def update_sheet_data(dataframe):
-  sheet.clear()
-  sheet.update(
-      [dataframe.columns.values.tolist()] + dataframe.astype(str).values.tolist()
-  )
+@st.cache_data(ttl=20, show_spinner=False)
+def load_stock_records():
+  """Lecture cachée du stock (évite un appel API à chaque interaction)."""
+  return sheet.get_all_records()
 
 
 def render_kpi(label: str, value: str, icon: str = ""):
@@ -202,29 +199,62 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
-# ================== FONCTIONS API ==================
+def sheet_row_index(pandas_idx: int) -> int:
+  """Convertit un index pandas (0-based, sans en-tête) en index de ligne gspread (1-based, +1 pour l'en-tête)."""
+  return pandas_idx + 2
+
+
+def update_qty_cell(pandas_idx: int, new_qty: int):
+  row = sheet_row_index(pandas_idx)
+  sheet.update_acell(f"{QTY_COL_LETTER}{row}", new_qty)
+  load_stock_records.clear()
+
+
+def delete_sheet_row(pandas_idx: int):
+  row = sheet_row_index(pandas_idx)
+  sheet.delete_rows(row)
+  load_stock_records.clear()
+
+
+# ================== FONCTIONS API TIERCES (métadonnées par jeu) ==================
 
 @st.cache_data(show_spinner=False)
 def fetch_riftbound_card_from_riftcodex(card_name: str):
-  """ API Publique pour Riftbound (api.riftcodex.com) """
-  if not card_name: return {}
+  """API publique pour Riftbound (api.riftcodex.com)."""
+  if not card_name:
+    return {}
   try:
-    response = requests.get("https://api.riftcodex.com/api/cards", params={"q": card_name, "limit": 5}, timeout=8)
+    response = requests.get(
+        "https://api.riftcodex.com/api/cards",
+        params={"q": card_name, "limit": 5},
+        timeout=8,
+    )
     response.raise_for_status()
     results = response.json().get("items", [])
-    if not results: return {}
+    if not results:
+      return {}
 
     card_name_lower = card_name.strip().lower()
-    best_match = next((c for c in results if c.get("name", "").strip().lower() == card_name_lower), results[0])
+    best_match = next(
+        (c for c in results if c.get("name", "").strip().lower() == card_name_lower),
+        results[0],
+    )
 
     details = {}
-    if "name" in best_match: details["card_name"] = str(best_match["name"])
-    if "set" in best_match: details["set_name"] = str(best_match["set"])
-    if "rarity" in best_match: details["rarity"] = str(best_match["rarity"]).capitalize()
-    if "cost" in best_match: details["play_cost"] = str(best_match["cost"])
-    elif "energy_cost" in best_match: details["play_cost"] = str(best_match["energy_cost"])
-    if "collector_number" in best_match: details["card_number"] = str(best_match["collector_number"])
-    elif "number" in best_match: details["card_number"] = str(best_match["number"])
+    if "name" in best_match:
+      details["card_name"] = str(best_match["name"])
+    if "set" in best_match:
+      details["set_name"] = str(best_match["set"])
+    if "rarity" in best_match:
+      details["rarity"] = str(best_match["rarity"]).capitalize()
+    if "cost" in best_match:
+      details["play_cost"] = str(best_match["cost"])
+    elif "energy_cost" in best_match:
+      details["play_cost"] = str(best_match["energy_cost"])
+    if "collector_number" in best_match:
+      details["card_number"] = str(best_match["collector_number"])
+    elif "number" in best_match:
+      details["card_number"] = str(best_match["number"])
     return details
   except Exception:
     return {}
@@ -232,26 +262,37 @@ def fetch_riftbound_card_from_riftcodex(card_name: str):
 
 @st.cache_data(show_spinner=False)
 def fetch_onepiece_card_from_optcgapi(card_id: str):
-  """ API Publique communautaire pour One Piece Card Game (optcgapi.com) """
-  if not card_id: return {}
+  """API publique communautaire pour One Piece Card Game (optcgapi.com)."""
+  if not card_id:
+    return {}
   card_id = card_id.upper().strip().split()[0]
-  if card_id.startswith("ST"): url = f"https://optcgapi.com/api/decks/card/{card_id}/"
-  elif card_id.startswith("P"): url = f"https://optcgapi.com/api/promos/card/{card_id}/"
-  else: url = f"https://optcgapi.com/api/sets/card/{card_id}/"
-      
+  if card_id.startswith("ST"):
+    url = f"https://optcgapi.com/api/decks/card/{card_id}/"
+  elif card_id.startswith("P"):
+    url = f"https://optcgapi.com/api/promos/card/{card_id}/"
+  else:
+    url = f"https://optcgapi.com/api/sets/card/{card_id}/"
+
   try:
     response = requests.get(url, timeout=8)
     response.raise_for_status()
     data = response.json()
-    if isinstance(data, list) and len(data) > 0: best_match = data[0]
-    elif isinstance(data, dict): best_match = data
-    else: return {}
-        
+    if isinstance(data, list) and len(data) > 0:
+      best_match = data[0]
+    elif isinstance(data, dict):
+      best_match = data
+    else:
+      return {}
+
     details = {}
-    if "name" in best_match: details["card_name"] = str(best_match["name"])
-    if "set_name" in best_match: details["set_name"] = str(best_match["set_name"])
-    if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
-    if "cost" in best_match: details["play_cost"] = str(best_match["cost"])
+    if "name" in best_match:
+      details["card_name"] = str(best_match["name"])
+    if "set_name" in best_match:
+      details["set_name"] = str(best_match["set_name"])
+    if "rarity" in best_match:
+      details["rarity"] = str(best_match["rarity"])
+    if "cost" in best_match:
+      details["play_cost"] = str(best_match["cost"])
     return details
   except Exception:
     return {}
@@ -259,14 +300,20 @@ def fetch_onepiece_card_from_optcgapi(card_id: str):
 
 @st.cache_data(show_spinner=False)
 def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
-  """ API Publique pour Pokémon TCG (pokemontcg.io) """
-  if not card_name: return {}
+  """API publique pour Pokémon TCG."""
+  if not card_name:
+    return {}
   try:
     clean_name = card_name.split()[0].replace("é", "e").strip()
-    response = requests.get("https://api.pokemontcg.io/v2/cards", params={"q": f'name:"{clean_name}"'}, timeout=8)
+    response = requests.get(
+        "https://api.pokemontcg.io/v2/cards",
+        params={"q": f'name:"{clean_name}"'},
+        timeout=8,
+    )
     response.raise_for_status()
     results = response.json().get("data", [])
-    if not results: return {}
+    if not results:
+      return {}
 
     best_match = results[0]
     if card_number:
@@ -277,9 +324,12 @@ def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
           break
 
     details = {}
-    if "name" in best_match: details["card_name"] = str(best_match["name"])
-    if "set" in best_match and "name" in best_match["set"]: details["set_name"] = str(best_match["set"]["name"])
-    if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
+    if "name" in best_match:
+      details["card_name"] = str(best_match["name"])
+    if "set" in best_match and "name" in best_match["set"]:
+      details["set_name"] = str(best_match["set"]["name"])
+    if "rarity" in best_match:
+      details["rarity"] = str(best_match["rarity"])
     return details
   except Exception:
     return {}
@@ -287,28 +337,77 @@ def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
 
 @st.cache_data(show_spinner=False)
 def fetch_lorcana_card_from_api(card_name: str):
-  """ API Publique communautaire pour Disney Lorcana """
-  if not card_name: return {}
+  """API publique communautaire pour Disney Lorcana."""
+  if not card_name:
+    return {}
   try:
     clean_name = card_name.split("-")[0].strip()
-    response = requests.get(f"https://api.lorcana-api.com/cards/fetch?search=name~{clean_name}", timeout=8)
+    response = requests.get(
+        f"https://api.lorcana-api.com/cards/fetch?search=name~{clean_name}", timeout=8
+    )
     response.raise_for_status()
     results = response.json()
-    if not results or not isinstance(results, list): return {}
-      
+    if not results or not isinstance(results, list):
+      return {}
+
     best_match = results[0]
     details = {}
     full_name = str(best_match.get("Name", ""))
-    if best_match.get("Subtitle"): full_name += f" - {best_match['Subtitle']}"
-    if full_name: details["card_name"] = full_name
-      
-    if best_match.get("Set_Name"): details["set_name"] = str(best_match["Set_Name"])
-    if best_match.get("Rarity"): details["rarity"] = str(best_match["Rarity"])
-    if best_match.get("Cost"): details["play_cost"] = str(best_match["Cost"])
-    if best_match.get("Card_Num"): details["card_number"] = str(best_match["Card_Num"])
+    if best_match.get("Subtitle"):
+      full_name += f" - {best_match['Subtitle']}"
+    if full_name:
+      details["card_name"] = full_name
+
+    if best_match.get("Set_Name"):
+      details["set_name"] = str(best_match["Set_Name"])
+    if best_match.get("Rarity"):
+      details["rarity"] = str(best_match["Rarity"])
+    if best_match.get("Cost"):
+      details["play_cost"] = str(best_match["Cost"])
+    if best_match.get("Card_Num"):
+      details["card_number"] = str(best_match["Card_Num"])
     return details
   except Exception:
     return {}
+
+
+def enrich_card_data(card: dict) -> dict:
+  """Complète les données extraites par Gemini avec les API tierces spécifiques au jeu."""
+  game_lower = card.get("game_name", "").lower()
+
+  if "riftbound" in game_lower:
+    riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""))
+    visual_rarity = card.get("rarity")
+    card.update({k: v for k, v in riftcodex_data.items() if v})
+    if visual_rarity and visual_rarity.lower() not in ["non spécifiée", "", "null", "none"]:
+      card["rarity"] = visual_rarity
+    card["cardmarket_slug"] = "Riftbound"
+    card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
+
+  elif "one piece" in game_lower:
+    optcg_data = fetch_onepiece_card_from_optcgapi(card.get("card_number", ""))
+    card.update({k: v for k, v in optcg_data.items() if v})
+    card["cardmarket_slug"] = "OnePiece"
+    card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
+
+  elif "pok" in game_lower:
+    pkmn_data = fetch_pokemon_card_from_pokemontcgio(card.get("card_name", ""), card.get("card_number", ""))
+    card.update({k: v for k, v in pkmn_data.items() if v})
+    card["cardmarket_slug"] = "Pokemon"
+    card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
+
+  elif "lorcana" in game_lower:
+    lorcana_data = fetch_lorcana_card_from_api(card.get("card_name", ""))
+    card.update({k: v for k, v in lorcana_data.items() if v})
+    card["cardmarket_slug"] = "Lorcana"
+    card["cardmarket_search_term"] = card.get("card_name", "").replace(" - ", " ")
+
+  elif "palworld" in game_lower:
+    card["cardmarket_slug"] = "Palworld"
+    card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
+
+  return card
+
 
 # ================== MOTEUR IA ==================
 
@@ -325,12 +424,12 @@ def analyze_card_gemini_cached(image_bytes):
     3. "set_name" : Nom ou code d'extension officiel imprimé.
     4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
     5. "rarity" : Rareté officielle exacte.
-       - Pour RIFTBOUND, regarde attentivement le petit symbole / symbole géométrique coloré en bas au centre/droite de la carte :
-         * Cercle / Perle nacre-blanche = Common
-         * Triangle vert / cyan = Uncommon
-         * Losange / Diamant rose / magenta = Rare
-         * Pentagone orange / flamme = Epic
-         * Hexagone jaune / doré = Overnumbered / Alternate Art
+       - Pour RIFTBOUND : Regarde TOUT EN BAS DE LA CARTE, AU MILIEU. Tu y verras un petit symbole géométrique :
+         * Boule blanche/grise = Common
+         * Triangle vert = Uncommon
+         * Losange rose = Rare
+         * Pentagone orange = Epic
+         * Hexagone jaune = Overnumbered / Alternate Art
        - Pour ONE PIECE : C, UC, R, SR, SEC, P (attention : "DON!!" est la ressource, JAMAIS la rareté).
        - Pour d'autres jeux : Commune, Peu Commune, Rare, Épique, Légendaire, Secret Rare, Promo.
     6. "play_cost" : Le coût en mana/ressource/énergie (ex: 5, 1, 10).
@@ -358,298 +457,105 @@ tab1, tab2 = st.tabs(["📸 Scanner & Importer", "📦 Gestion du Stock"])
 
 # --- ONGLET 1 : SCANNER ---
 with tab1:
-  scan_mode = st.radio(
-      "Mode de traitement :",
-      ["🎴 Unité (Caméra / Fichier)", "⚡ Scan en Lot (Multiple)"],
+  source_type = st.radio(
+      "Source de l'image :",
+      ["📷 Appareil photo", "💻 PC"],
       horizontal=True,
+      index=0,  # Appareil photo sélectionné par défaut
   )
 
-  if scan_mode == "🎴 Unité (Caméra / Fichier)":
-    source_type = st.radio(
-        "Source d'image :",
-        ["💻 Fichier (PC / Galerie)", "📷 Caméra"],
-        horizontal=True,
+  if source_type == "💻 PC":
+    image_input = st.file_uploader(
+        "Dépose la photo de la carte", type=["jpg", "jpeg", "png", "webp"]
     )
-
-    if source_type == "💻 Fichier (PC / Galerie)":
-      image_input = st.file_uploader(
-          "Dépose la photo de la carte", type=["jpg", "jpeg", "png", "webp"]
-      )
-    else:
-      image_input = st.camera_input("Prendre la carte en photo")
-
-    if image_input:
-      img_byte_arr = io.BytesIO()
-      Image.open(image_input).convert("RGB").save(img_byte_arr, format="JPEG")
-      image_bytes = img_byte_arr.getvalue()
-
-      try:
-        with st.spinner("Analyse visuelle haute précision par Gemini..."):
-          card = analyze_card_gemini_cached(image_bytes)
-
-        game_lower = card.get("game_name", "").lower()
-
-        # 1. RIFTBOUND
-        if "riftbound" in game_lower:
-          with st.spinner("Récupération des métadonnées sur Riftcodex..."):
-            riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""))
-            # On conserve la rareté lue visuellement si l'API ne la fournit pas clairement
-            visual_rarity = card.get("rarity")
-            card.update({k: v for k, v in riftcodex_data.items() if v})
-            if visual_rarity and visual_rarity != "Non spécifiée":
-              card["rarity"] = visual_rarity
-            card["cardmarket_slug"] = "Riftbound"
-            card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
-
-        # 2. ONE PIECE
-        elif "one piece" in game_lower:
-          with st.spinner("Récupération des métadonnées sur OPTCG API..."):
-            optcg_data = fetch_onepiece_card_from_optcgapi(card.get("card_number", ""))
-            card.update({k: v for k, v in optcg_data.items() if v})
-            card["cardmarket_slug"] = "OnePiece"
-            card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
-
-        # 3. POKÉMON
-        elif "pok" in game_lower:
-          with st.spinner("Récupération des métadonnées sur Pokémon TCG API..."):
-            pkmn_data = fetch_pokemon_card_from_pokemontcgio(card.get("card_name", ""), card.get("card_number", ""))
-            card.update({k: v for k, v in pkmn_data.items() if v})
-            card["cardmarket_slug"] = "Pokemon"
-            card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
-
-        # 4. LORCANA
-        elif "lorcana" in game_lower:
-          with st.spinner("Récupération des métadonnées sur Lorcana API..."):
-            lorcana_data = fetch_lorcana_card_from_api(card.get("card_name", ""))
-            card.update({k: v for k, v in lorcana_data.items() if v})
-            card["cardmarket_slug"] = "Lorcana"
-            card["cardmarket_search_term"] = card.get('card_name', '').replace(" - ", " ")
-
-        # 5. PALWORLD
-        elif "palworld" in game_lower:
-          card["cardmarket_slug"] = "Palworld"
-          card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
-
-        st.markdown("---")
-        st.subheader("✏️ Vérifier et corriger les informations obtenues")
-
-        with st.form("single_add_form"):
-          col1, col2, col3 = st.columns(3)
-
-          with col1:
-            edit_game_name = st.text_input(
-                "Jeu", value=card.get("game_name", "")
-            )
-            edit_card_name = st.text_input(
-                "Nom de la carte", value=card.get("card_name", "")
-            )
-            edit_set_name = st.text_input(
-                "Extension", value=card.get("set_name", "")
-            )
-
-          with col2:
-            edit_card_number = st.text_input(
-                "Numéro de carte",
-                value=card.get("card_number", ""),
-            )
-            edit_rarity = st.text_input(
-                "Rareté", value=card.get("rarity", "")
-            )
-            edit_play_cost = st.text_input(
-                "Coût (Mana/Ressource)", value=str(card.get("play_cost", ""))
-            )
-
-          with col3:
-            edit_language = st.text_input(
-                "Langue", value=card.get("language", "FR")
-            )
-            edit_emplacement = st.text_input(
-                "Emplacement physique", value="Classeur 1"
-            )
-            edit_quantite = st.number_input(
-                "Quantité", min_value=1, value=1, step=1
-            )
-
-          st.markdown("<br>", unsafe_allow_html=True)
-          submit_button = st.form_submit_button("⚡ Ajouter au stock")
-
-          if submit_button:
-            cardmarket_url = build_cardmarket_url(
-                card.get("cardmarket_slug", edit_game_name),
-                card.get(
-                    "cardmarket_search_term",
-                    f"{edit_card_name} {edit_card_number}",
-                ),
-            )
-            date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-            sheet.append_row([
-                date_str,
-                edit_game_name,
-                edit_card_name,
-                edit_set_name,
-                edit_card_number,
-                edit_rarity,
-                edit_play_cost,
-                edit_language,
-                edit_emplacement,
-                edit_quantite,
-                cardmarket_url,
-            ])
-            st.success(f"✅ {edit_card_name} enregistré avec succès !")
-
-      except Exception as e:
-        st.error(f"⚠️ Erreur d'analyse : {e}")
-
   else:
-    uploaded_files = st.file_uploader(
-        "Importe plusieurs images de cartes simultanément",
-        type=["jpg", "jpeg", "png", "webp"],
-        accept_multiple_files=True,
-    )
+    # NOTE : st.camera_input ne permet pas de forcer nativement la caméra
+    # arrière depuis le code Python — voir le message après le code pour
+    # le détail de cette limitation et une piste de contournement.
+    image_input = st.camera_input("Prendre la carte en photo")
 
-    if uploaded_files:
-      batch_loc = st.text_input(
-          "Emplacement commun pour ce lot :", value="Boîte Arrivage"
-      )
+  if image_input:
+    img_byte_arr = io.BytesIO()
+    Image.open(image_input).convert("RGB").save(img_byte_arr, format="JPEG")
+    image_bytes = img_byte_arr.getvalue()
 
-      if st.button(f"⚡ Analyser le lot ({len(uploaded_files)} images)"):
-        progress_bar = st.progress(0)
-        analyzed_cards = []
+    try:
+      with st.spinner("Analyse visuelle haute précision par Gemini..."):
+        card = analyze_card_gemini_cached(image_bytes)
 
-        for idx, file in enumerate(uploaded_files):
-          img_byte_arr = io.BytesIO()
-          Image.open(file).convert("RGB").save(img_byte_arr, format="JPEG")
+      with st.spinner("Récupération des métadonnées complémentaires..."):
+        card = enrich_card_data(card)
 
-          try:
-            parsed_card = analyze_card_gemini_cached(img_byte_arr.getvalue())
-            game_lower = parsed_card.get("game_name", "").lower()
+      st.markdown("---")
+      st.subheader("✏️ Vérifier et corriger les informations obtenues")
 
-            if "riftbound" in game_lower:
-              riftcodex_data = fetch_riftbound_card_from_riftcodex(parsed_card.get("card_name", ""))
-              visual_rarity = parsed_card.get("rarity")
-              parsed_card.update({k: v for k, v in riftcodex_data.items() if v})
-              if visual_rarity and visual_rarity != "Non spécifiée":
-                parsed_card["rarity"] = visual_rarity
-              parsed_card["cardmarket_slug"] = "Riftbound"
-              parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
+      with st.form("single_add_form"):
+        col1, col2, col3 = st.columns(3)
 
-            elif "one piece" in game_lower:
-              optcg_data = fetch_onepiece_card_from_optcgapi(parsed_card.get("card_number", ""))
-              parsed_card.update({k: v for k, v in optcg_data.items() if v})
-              parsed_card["cardmarket_slug"] = "OnePiece"
-              parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
+        with col1:
+          edit_game_name = st.text_input("Jeu", value=card.get("game_name", ""))
+          edit_card_name = st.text_input("Nom de la carte", value=card.get("card_name", ""))
+          edit_set_name = st.text_input("Extension", value=card.get("set_name", ""))
 
-            elif "pok" in game_lower:
-              pkmn_data = fetch_pokemon_card_from_pokemontcgio(parsed_card.get("card_name", ""), parsed_card.get("card_number", ""))
-              parsed_card.update({k: v for k, v in pkmn_data.items() if v})
-              parsed_card["cardmarket_slug"] = "Pokemon"
-              parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
+        with col2:
+          edit_card_number = st.text_input("Numéro de carte", value=card.get("card_number", ""))
+          edit_rarity = st.text_input("Rareté", value=card.get("rarity", ""))
+          edit_play_cost = st.text_input("Coût (Mana/Ressource)", value=str(card.get("play_cost", "")))
 
-            elif "lorcana" in game_lower:
-              lorcana_data = fetch_lorcana_card_from_api(parsed_card.get("card_name", ""))
-              parsed_card.update({k: v for k, v in lorcana_data.items() if v})
-              parsed_card["cardmarket_slug"] = "Lorcana"
-              parsed_card["cardmarket_search_term"] = parsed_card.get('card_name', '').replace(" - ", " ")
+        with col3:
+          edit_language = st.text_input("Langue", value=card.get("language", "FR"))
+          edit_emplacement = st.text_input("Emplacement physique", value="Classeur 1")
+          edit_quantite = st.number_input("Quantité", min_value=1, value=1, step=1)
 
-            elif "palworld" in game_lower:
-              parsed_card["cardmarket_slug"] = "Palworld"
-              parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
+        st.markdown("<br>", unsafe_allow_html=True)
+        submit_button = st.form_submit_button("⚡ Ajouter au stock")
 
-            analyzed_cards.append(parsed_card)
-          except Exception as e:
-            st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
-
-          progress_bar.progress((idx + 1) / len(uploaded_files))
-
-        st.session_state["batch_results"] = analyzed_cards
-        st.success("Analyse du lot terminée !")
-
-    if "batch_results" in st.session_state and st.session_state["batch_results"]:
-      st.markdown(
-          "### 📋 Récapitulatif du lot (Double-clique sur une case pour la"
-          " modifier)"
-      )
-
-      batch_data = []
-      for c in st.session_state["batch_results"]:
-        batch_data.append({
-            "Jeu": c.get("game_name", ""),
-            "Nom": c.get("card_name", ""),
-            "Extension": c.get("set_name", ""),
-            "Numéro": c.get("card_number", ""),
-            "Rareté": c.get("rarity", ""),
-            "Coût": c.get("play_cost", ""),
-            "Langue": c.get("language", "FR"),
-            "Slug Cardmarket": c.get("cardmarket_slug", "Pokemon"),
-            "Terme Recherche": c.get(
-                "cardmarket_search_term", c.get("card_name", "")
-            ),
-        })
-
-      batch_df = pd.DataFrame(batch_data)
-      edited_df = st.data_editor(
-          batch_df, use_container_width=True, num_rows="dynamic"
-      )
-
-      if st.button("💾 Tout valider dans Google Sheets"):
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        rows_to_add = []
-
-        for _, row in edited_df.iterrows():
-          url = build_cardmarket_url(
-              row["Slug Cardmarket"], row["Terme Recherche"]
+        if submit_button:
+          cardmarket_url = build_cardmarket_url(
+              card.get("cardmarket_slug", edit_game_name),
+              card.get("cardmarket_search_term", f"{edit_card_name} {edit_card_number}"),
           )
-          rows_to_add.append([
-              date_str,
-              row["Jeu"],
-              row["Nom"],
-              row["Extension"],
-              row["Numéro"],
-              row["Rareté"],
-              row["Coût"],
-              row["Langue"],
-              batch_loc,
-              1,
-              url,
-          ])
+          date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        sheet.append_rows(rows_to_add)
-        st.success("✅ Lot ajouté au stock en une fraction de seconde !")
-        del st.session_state["batch_results"]
-        st.rerun()
+          sheet.append_row([
+              date_str,
+              edit_game_name,
+              edit_card_name,
+              edit_set_name,
+              edit_card_number,
+              edit_rarity,
+              edit_play_cost,
+              edit_language,
+              edit_emplacement,
+              edit_quantite,
+              cardmarket_url,
+          ])
+          load_stock_records.clear()
+          st.success(f"✅ {edit_card_name} enregistré avec succès !")
+
+    except Exception as e:
+      st.error(f"⚠️ Erreur d'analyse : {e}")
 
 # --- ONGLET 2 : INVENTAIRE ---
 with tab2:
   try:
-    records = sheet.get_all_records()
+    records = load_stock_records()
 
     if records:
       df = pd.DataFrame(records)
-
-      df["Quantité"] = (
-          pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
-      )
+      df["Quantité"] = pd.to_numeric(df["Quantité"], errors="coerce").fillna(1).astype(int)
 
       col_m1, col_m2, col_m3 = st.columns(3)
       with col_m1:
-        st.markdown(
-            render_kpi("Références", str(len(df)), "🎴"), unsafe_allow_html=True
-        )
+        st.markdown(render_kpi("Références", str(len(df)), "🎴"), unsafe_allow_html=True)
       with col_m2:
         st.markdown(
-            render_kpi(
-                "Total Exemplaires", str(int(df["Quantité"].sum())), "📦"
-            ),
+            render_kpi("Total Exemplaires", str(int(df["Quantité"].sum())), "📦"),
             unsafe_allow_html=True,
         )
       with col_m3:
         st.markdown(
-            render_kpi(
-                "Jeux en Stock",
-                str(df["Jeu"].nunique() if "Jeu" in df else 0),
-                "🎮",
-            ),
+            render_kpi("Jeux en Stock", str(df["Jeu"].nunique() if "Jeu" in df else 0), "🎮"),
             unsafe_allow_html=True,
         )
 
@@ -657,9 +563,7 @@ with tab2:
 
       c_src, c_flt, c_exp = st.columns([2, 1, 1])
       with c_src:
-        search_term = st.text_input(
-            "🔍 Rechercher...", placeholder="Nom, numéro, emplacement..."
-        )
+        search_term = st.text_input("🔍 Rechercher...", placeholder="Nom, numéro, emplacement...")
       with c_flt:
         jeux_dispos = ["Tous les jeux"] + sorted(df["Jeu"].unique().tolist())
         selected_game = st.selectbox("🎮 Filtrer par jeu", jeux_dispos)
@@ -680,35 +584,23 @@ with tab2:
       if search_term:
         filtered_df = filtered_df[
             filtered_df["Nom"].str.contains(search_term, case=False, na=False)
-            | filtered_df["Numéro"].str.contains(
-                search_term, case=False, na=False
-            )
-            | filtered_df.get("Emplacement", "")
-            .astype(str)
-            .str.contains(search_term, case=False, na=False)
+            | filtered_df["Numéro"].astype(str).str.contains(search_term, case=False, na=False)
+            | filtered_df.get("Emplacement", "").astype(str).str.contains(search_term, case=False, na=False)
         ]
 
       st.markdown(f"**Cartes affichées ({len(filtered_df)})**")
 
       for idx, row in filtered_df.iterrows():
         with st.container():
-          c_info, c_details, c_qty, c_actions, c_link = st.columns(
-              [3.5, 2.5, 1.2, 2, 1]
-          )
+          c_info, c_details, c_qty, c_actions, c_link = st.columns([3.5, 2.5, 1.2, 2, 1])
 
           with c_info:
             st.markdown(f"**{row['Nom']}** `{row['Numéro']}`")
             st.caption(f"{row['Jeu']} • {row['Extension']}")
 
           with c_details:
-            st.markdown(
-                f"📍 `{row.get('Emplacement', 'N/A')}` | Coût :"
-                f" `{row.get('Coût', 'N/A')}`"
-            )
-            st.caption(
-                f"Rareté : {row.get('Rareté', 'N/A')} •"
-                f" {row.get('Langue', 'FR')}"
-            )
+            st.markdown(f"📍 `{row.get('Emplacement', 'N/A')}` | Coût : `{row.get('Coût', 'N/A')}`")
+            st.caption(f"Rareté : {row.get('Rareté', 'N/A')} • {row.get('Langue', 'FR')}")
 
           with c_qty:
             st.markdown(f"### {row['Quantité']} ex.")
@@ -716,39 +608,30 @@ with tab2:
           with c_actions:
             b1, b2, b3 = st.columns(3)
             if b1.button("➕", key=f"add_{idx}"):
-              df.loc[idx, "Quantité"] += 1
-              update_sheet_data(df)
+              update_qty_cell(idx, row["Quantité"] + 1)
               st.rerun()
 
             if b2.button("➖", key=f"sub_{idx}"):
-              if df.loc[idx, "Quantité"] > 1:
-                df.loc[idx, "Quantité"] -= 1
+              if row["Quantité"] > 1:
+                update_qty_cell(idx, row["Quantité"] - 1)
               else:
-                df = df.drop(idx)
-              update_sheet_data(df)
+                delete_sheet_row(idx)
               st.rerun()
 
             if b3.button("🗑️", key=f"del_{idx}"):
-              df = df.drop(idx)
-              update_sheet_data(df)
+              delete_sheet_row(idx)
               st.rerun()
 
           with c_link:
             st.markdown(
-                f"<br><a href='{row['Lien Cardmarket']}' target='_blank'>↗"
-                " Voir</a>",
+                f"<br><a href='{row['Lien Cardmarket']}' target='_blank'>↗ Voir</a>",
                 unsafe_allow_html=True,
             )
 
-          st.markdown(
-              "<hr style='margin: 8px 0; opacity: 0.15;'>",
-              unsafe_allow_html=True,
-          )
+          st.markdown("<hr style='margin: 8px 0; opacity: 0.15;'>", unsafe_allow_html=True)
 
     else:
-      st.info(
-          "L'inventaire est actuellement vide. Scanne une carte pour commencer !"
-      )
+      st.info("L'inventaire est actuellement vide. Scanne une carte pour commencer !")
 
   except Exception as e:
     st.error(f"Erreur lors du chargement du stock : {e}")
