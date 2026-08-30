@@ -158,7 +158,7 @@ SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 @st.cache_resource
 def get_gemini_model():
   genai.configure(api_key=st.secrets["GEMINI_API_KEY"].strip())
-  return genai.GenerativeModel("gemini-2.5-flash") # Correction du modèle
+  return genai.GenerativeModel("gemini-3.5-flash-lite") # Correction du modèle
 
 
 @st.cache_resource
