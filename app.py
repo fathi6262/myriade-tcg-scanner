@@ -4,6 +4,7 @@ import io
 import json
 import re
 import urllib.parse
+import requests
 
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
@@ -157,7 +158,7 @@ SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
 @st.cache_resource
 def get_gemini_model():
   genai.configure(api_key=st.secrets["GEMINI_API_KEY"].strip())
-  return genai.GenerativeModel("gemini-3.5-flash-lite")
+  return genai.GenerativeModel("gemini-2.5-flash") # Correction du modèle
 
 
 @st.cache_resource
@@ -199,6 +200,58 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   clean_term = " ".join(clean_term.split())
   search_query = urllib.parse.quote(clean_term)
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
+
+
+@st.cache_data(show_spinner=False)
+def fetch_riftbound_card_from_riftcodex(card_name: str):
+  """
+  Interroge l'API publique REST de Riftcodex (api.riftcodex.com) 
+  qui centralise les données officielles pour Riftbound.
+  """
+  if not card_name:
+    return {}
+  
+  try:
+    # L'API Riftcodex ne requiert pas d'authentification pour la lecture
+    response = requests.get(
+        "https://api.riftcodex.com/api/cards",
+        params={"q": card_name, "limit": 5},
+        timeout=8,
+    )
+    response.raise_for_status()
+    data = response.json()
+    results = data.get("items", [])
+  except Exception:
+    return {}
+
+  if not results:
+    return {}
+
+  # Filtrage pour trouver la carte correspondante (insensible à la casse)
+  card_name_lower = card_name.strip().lower()
+  best_match = next(
+      (c for c in results if c.get("name", "").strip().lower() == card_name_lower),
+      results[0]
+  )
+
+  details = {}
+  if "set" in best_match:
+    details["set_name"] = str(best_match["set"])
+  if "rarity" in best_match:
+    details["rarity"] = str(best_match["rarity"]).capitalize()
+  
+  # Le coût peut varier selon le nom de la clé (cost ou energy_cost)
+  if "cost" in best_match:
+    details["play_cost"] = str(best_match["cost"])
+  elif "energy_cost" in best_match:
+    details["play_cost"] = str(best_match["energy_cost"])
+    
+  if "collector_number" in best_match:
+    details["card_number"] = str(best_match["collector_number"])
+  elif "number" in best_match:
+    details["card_number"] = str(best_match["number"])
+      
+  return details
 
 
 @st.cache_data(show_spinner=False)
@@ -267,6 +320,16 @@ with tab1:
       try:
         with st.spinner("Analyse visuelle haute précision par Gemini..."):
           card = analyze_card_gemini_cached(image_bytes)
+
+        # --- NOUVEAU : Interrogation de l'API Riftcodex ---
+        if "riftbound" in card.get("game_name", "").lower():
+          with st.spinner("Récupération des métadonnées sur Riftcodex..."):
+            riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""))
+            
+            # On écrase les champs avec la vraie data de l'API
+            card.update({k: v for k, v in riftcodex_data.items() if v})
+            card["cardmarket_slug"] = "Riftbound"
+            card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
 
         st.markdown("---")
         st.subheader("✏️ Vérifier et corriger les informations obtenues")
@@ -361,6 +424,14 @@ with tab1:
 
           try:
             parsed_card = analyze_card_gemini_cached(img_byte_arr.getvalue())
+            
+            # --- NOUVEAU : Interrogation de l'API Riftcodex ---
+            if "riftbound" in parsed_card.get("game_name", "").lower():
+              riftcodex_data = fetch_riftbound_card_from_riftcodex(parsed_card.get("card_name", ""))
+              parsed_card.update({k: v for k, v in riftcodex_data.items() if v})
+              parsed_card["cardmarket_slug"] = "Riftbound"
+              parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
+
             analyzed_cards.append(parsed_card)
           except Exception as e:
             st.warning(f"Impossible d'analyser l'image {file.name}: {e}")
