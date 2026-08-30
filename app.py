@@ -71,11 +71,6 @@ st.markdown(
         backdrop-filter: blur(10px);
         transition: transform 0.2s ease, border-color 0.2s ease;
     }
-    
-    .kpi-card:hover {
-        border-color: #a855f7 !important;
-        transform: translateY(-2px);
-    }
 
     .kpi-label {
         font-size: 0.8rem !important;
@@ -176,7 +171,7 @@ sheet = get_google_sheet()
 
 
 # ---------------------------------------------------------
-# 3. FONCTIONS UTILITAIRES ET API TIERCE
+# 3. FONCTIONS UTILITAIRES ET API TIERCES
 # ---------------------------------------------------------
 def update_sheet_data(dataframe):
   sheet.clear()
@@ -202,93 +197,122 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
   return f"https://www.cardmarket.com/fr/{clean_slug}/Products/Search?searchString={search_query}"
 
 
+# ================== FONCTIONS API ==================
+
 @st.cache_data(show_spinner=False)
 def fetch_riftbound_card_from_riftcodex(card_name: str):
   """ API Publique pour Riftbound (api.riftcodex.com) """
-  if not card_name:
-    return {}
+  if not card_name: return {}
   try:
-    response = requests.get(
-        "https://api.riftcodex.com/api/cards",
-        params={"q": card_name, "limit": 5},
-        timeout=8,
-    )
+    response = requests.get("https://api.riftcodex.com/api/cards", params={"q": card_name, "limit": 5}, timeout=8)
     response.raise_for_status()
-    data = response.json()
-    results = data.get("items", [])
+    results = response.json().get("items", [])
+    if not results: return {}
+
+    card_name_lower = card_name.strip().lower()
+    best_match = next((c for c in results if c.get("name", "").strip().lower() == card_name_lower), results[0])
+
+    details = {}
+    if "name" in best_match: details["card_name"] = str(best_match["name"])
+    if "set" in best_match: details["set_name"] = str(best_match["set"])
+    if "rarity" in best_match: details["rarity"] = str(best_match["rarity"]).capitalize()
+    if "cost" in best_match: details["play_cost"] = str(best_match["cost"])
+    elif "energy_cost" in best_match: details["play_cost"] = str(best_match["energy_cost"])
+    if "collector_number" in best_match: details["card_number"] = str(best_match["collector_number"])
+    elif "number" in best_match: details["card_number"] = str(best_match["number"])
+    return details
   except Exception:
     return {}
-
-  if not results:
-    return {}
-
-  card_name_lower = card_name.strip().lower()
-  best_match = next(
-      (c for c in results if c.get("name", "").strip().lower() == card_name_lower),
-      results[0]
-  )
-
-  details = {}
-  if "set" in best_match:
-    details["set_name"] = str(best_match["set"])
-  if "rarity" in best_match:
-    details["rarity"] = str(best_match["rarity"]).capitalize()
-  if "cost" in best_match:
-    details["play_cost"] = str(best_match["cost"])
-  elif "energy_cost" in best_match:
-    details["play_cost"] = str(best_match["energy_cost"])
-  if "collector_number" in best_match:
-    details["card_number"] = str(best_match["collector_number"])
-  elif "number" in best_match:
-    details["card_number"] = str(best_match["number"])
-      
-  return details
 
 
 @st.cache_data(show_spinner=False)
 def fetch_onepiece_card_from_optcgapi(card_id: str):
   """ API Publique communautaire pour One Piece Card Game (optcgapi.com) """
-  if not card_id:
-    return {}
-  
-  # L'API a besoin de la référence propre (ex: ST21-014)
+  if not card_id: return {}
   card_id = card_id.upper().strip().split()[0]
-  
-  # Routage selon le type de carte (Starter Deck, Promo ou Set classique)
-  if card_id.startswith("ST"):
-    url = f"https://optcgapi.com/api/decks/card/{card_id}/"
-  elif card_id.startswith("P"):
-    url = f"https://optcgapi.com/api/promos/card/{card_id}/"
-  else:
-    url = f"https://optcgapi.com/api/sets/card/{card_id}/"
+  if card_id.startswith("ST"): url = f"https://optcgapi.com/api/decks/card/{card_id}/"
+  elif card_id.startswith("P"): url = f"https://optcgapi.com/api/promos/card/{card_id}/"
+  else: url = f"https://optcgapi.com/api/sets/card/{card_id}/"
       
   try:
     response = requests.get(url, timeout=8)
     response.raise_for_status()
     data = response.json()
-    
-    # L'API peut renvoyer une liste ou un dictionnaire direct selon la route
-    if isinstance(data, list) and len(data) > 0:
-      best_match = data[0]
-    elif isinstance(data, dict):
-      best_match = data
-    else:
-      return {}
+    if isinstance(data, list) and len(data) > 0: best_match = data[0]
+    elif isinstance(data, dict): best_match = data
+    else: return {}
         
     details = {}
-    if "name" in best_match:
-      details["card_name"] = str(best_match["name"])
-    if "set_name" in best_match:
-      details["set_name"] = str(best_match["set_name"])
-    if "rarity" in best_match:
-      details["rarity"] = str(best_match["rarity"])
-    if "cost" in best_match:
-      details["play_cost"] = str(best_match["cost"])
-        
+    if "name" in best_match: details["card_name"] = str(best_match["name"])
+    if "set_name" in best_match: details["set_name"] = str(best_match["set_name"])
+    if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
+    if "cost" in best_match: details["play_cost"] = str(best_match["cost"])
     return details
   except Exception:
     return {}
 
+
+@st.cache_data(show_spinner=False)
+def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
+  """ API Publique pour Pokémon TCG (pokemontcg.io) """
+  if not card_name: return {}
+  try:
+    # Recherche large par nom
+    clean_name = card_name.split()[0].replace("é", "e").strip()
+    response = requests.get("https://api.pokemontcg.io/v2/cards", params={"q": f'name:"{clean_name}"'}, timeout=8)
+    response.raise_for_status()
+    results = response.json().get("data", [])
+    
+    if not results: return {}
+
+    best_match = results[0]
+    # On affine si Gemini a repéré le numéro (ex: "199/165" -> "199")
+    if card_number:
+      num_only = card_number.split("/")[0].strip()
+      for r in results:
+        if str(r.get("number")).lower() == num_only.lower():
+          best_match = r
+          break
+
+    details = {}
+    if "name" in best_match: details["card_name"] = str(best_match["name"])
+    if "set" in best_match and "name" in best_match["set"]: details["set_name"] = str(best_match["set"]["name"])
+    if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
+    return details
+  except Exception:
+    return {}
+
+
+@st.cache_data(show_spinner=False)
+def fetch_lorcana_card_from_api(card_name: str):
+  """ API Publique communautaire pour Disney Lorcana """
+  if not card_name: return {}
+  try:
+    clean_name = card_name.split("-")[0].strip() # Enlève le sous-titre pour la requête
+    response = requests.get(f"https://api.lorcana-api.com/cards/fetch?search=name~{clean_name}", timeout=8)
+    response.raise_for_status()
+    results = response.json()
+    
+    if not results or not isinstance(results, list): return {}
+      
+    best_match = results[0]
+    details = {}
+    
+    # Reconstitution du nom complet
+    full_name = str(best_match.get("Name", ""))
+    if best_match.get("Subtitle"): full_name += f" - {best_match['Subtitle']}"
+    if full_name: details["card_name"] = full_name
+      
+    if best_match.get("Set_Name"): details["set_name"] = str(best_match["Set_Name"])
+    if best_match.get("Rarity"): details["rarity"] = str(best_match["Rarity"])
+    if best_match.get("Cost"): details["play_cost"] = str(best_match["Cost"])
+    if best_match.get("Card_Num"): details["card_number"] = str(best_match["Card_Num"])
+    
+    return details
+  except Exception:
+    return {}
+
+# ================== MOTEUR IA ==================
 
 @st.cache_data(show_spinner=False)
 def analyze_card_gemini_cached(image_bytes):
@@ -298,17 +322,17 @@ def analyze_card_gemini_cached(image_bytes):
     Tu es un expert mondial en identification de cartes TCG (Trading Card Games).
     Analyse cette photo de carte et extrait avec une précision exacte ses données officielles :
 
-    1. "game_name" : Nom officiel du jeu (ex: "One Piece Card Game", "Riftbound", "Pokémon", "Magic: The Gathering", "Disney Lorcana", "Yu-Gi-Oh!").
-    2. "card_name" : Nom de la carte. Si la carte est en japonais, donne le nom anglais/romaji officiel suivi du nom japonais entre parenthèses ou slashes (ex: "Monkey D. Luffy / モンキー・D・ルフィ").
-    3. "set_name" : Nom ou code d'extension officiel (ex: "STARTER DECK EX -GEAR5- [ST-21]", "Vendetta", "ONE PIECE magazine Vol.20 Promo", "151").
-    4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227", "OP01-120"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
+    1. "game_name" : Nom officiel du jeu (ex: "One Piece Card Game", "Riftbound", "Pokémon", "Magic: The Gathering", "Disney Lorcana", "Palworld TCG", "Yu-Gi-Oh!").
+    2. "card_name" : Nom COMPLET de la carte. Tu dois inclure le titre principal ET le sous-titre s'il y en a un (ex: "Ahri, Inquisitive", "Dracaufeu ex", "Robin Hood - Unrivaled Archer"). Si la carte est en japonais, donne le nom complet anglais officiel (ex: "Monkey D. Luffy").
+    3. "set_name" : Nom ou code d'extension officiel imprimé.
+    4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
     5. "rarity" : Rareté officielle (ex: "Super Rare (SR)", "Rare (R)", "Épique", "Secret Rare (SEC)", "Commune (C)"). Attention : "DON!!" est le nom de la ressource, JAMAIS une rareté.
     6. "play_cost" : Le coût en mana/ressource/énergie (ex: 5, 1, 10).
     7. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
-    8. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot (ex: "OnePiece", "Riftbound", "Pokemon", "Magic", "Lorcana").
-    9. "cardmarket_search_term" : Termes exacts pour chercher la carte sur Cardmarket (Nom anglais + Référence, ex: "Monkey D. Luffy ST21-014").
+    8. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot (ex: "OnePiece", "Riftbound", "Pokemon", "Magic", "Lorcana", "Palworld").
+    9. "cardmarket_search_term" : Termes exacts pour chercher la carte sur Cardmarket (Nom anglais + Référence).
 
-    Génère STRICTEMENT un objet JSON valide.
+    Génère STRICTEMENT un objet JSON valide, sans formatage markdown additionnel.
     """
 
   response = gemini_model.generate_content(
@@ -359,7 +383,9 @@ with tab1:
 
         game_lower = card.get("game_name", "").lower()
         
-        # ROUTAGE API : RIFTBOUND
+        # --- SYSTÈME DE ROUTAGE API INTELLIGENT ---
+        
+        # 1. RIFTBOUND
         if "riftbound" in game_lower:
           with st.spinner("Récupération des métadonnées sur Riftcodex..."):
             riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""))
@@ -367,12 +393,34 @@ with tab1:
             card["cardmarket_slug"] = "Riftbound"
             card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
 
-        # ROUTAGE API : ONE PIECE
+        # 2. ONE PIECE
         elif "one piece" in game_lower:
           with st.spinner("Récupération des métadonnées sur OPTCG API..."):
             optcg_data = fetch_onepiece_card_from_optcgapi(card.get("card_number", ""))
             card.update({k: v for k, v in optcg_data.items() if v})
             card["cardmarket_slug"] = "OnePiece"
+            card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
+
+        # 3. POKÉMON
+        elif "pok" in game_lower:
+          with st.spinner("Récupération des métadonnées sur Pokémon TCG API..."):
+            pkmn_data = fetch_pokemon_card_from_pokemontcgio(card.get("card_name", ""), card.get("card_number", ""))
+            card.update({k: v for k, v in pkmn_data.items() if v})
+            card["cardmarket_slug"] = "Pokemon"
+            card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
+
+        # 4. LORCANA
+        elif "lorcana" in game_lower:
+          with st.spinner("Récupération des métadonnées sur Lorcana API..."):
+            lorcana_data = fetch_lorcana_card_from_api(card.get("card_name", ""))
+            card.update({k: v for k, v in lorcana_data.items() if v})
+            card["cardmarket_slug"] = "Lorcana"
+            # Cardmarket Lorcana utilise souvent des tirets pour les noms avec sous-titre
+            card["cardmarket_search_term"] = card.get('card_name', '').replace(" - ", " ")
+            
+        # 5. PALWORLD (Automatique via Gemini car pas d'API communautaire dispo depuis sa sortie récente)
+        elif "palworld" in game_lower:
+            card["cardmarket_slug"] = "Palworld"
             card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
 
         st.markdown("---")
@@ -406,7 +454,7 @@ with tab1:
 
           with col3:
             edit_language = st.text_input(
-                "Langue", value=card.get("language", "JP")
+                "Langue", value=card.get("language", "FR")
             )
             edit_emplacement = st.text_input(
                 "Emplacement physique", value="Classeur 1"
@@ -470,19 +518,35 @@ with tab1:
             parsed_card = analyze_card_gemini_cached(img_byte_arr.getvalue())
             game_lower = parsed_card.get("game_name", "").lower()
             
-            # ROUTAGE API : RIFTBOUND
+            # --- ROUTAGE DES LOTS VERS LES API ---
             if "riftbound" in game_lower:
               riftcodex_data = fetch_riftbound_card_from_riftcodex(parsed_card.get("card_name", ""))
               parsed_card.update({k: v for k, v in riftcodex_data.items() if v})
               parsed_card["cardmarket_slug"] = "Riftbound"
               parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
 
-            # ROUTAGE API : ONE PIECE
             elif "one piece" in game_lower:
               optcg_data = fetch_onepiece_card_from_optcgapi(parsed_card.get("card_number", ""))
               parsed_card.update({k: v for k, v in optcg_data.items() if v})
               parsed_card["cardmarket_slug"] = "OnePiece"
               parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
+
+            elif "pok" in game_lower:
+              pkmn_data = fetch_pokemon_card_from_pokemontcgio(parsed_card.get("card_name", ""), parsed_card.get("card_number", ""))
+              parsed_card.update({k: v for k, v in pkmn_data.items() if v})
+              parsed_card["cardmarket_slug"] = "Pokemon"
+              parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
+
+            elif "lorcana" in game_lower:
+              lorcana_data = fetch_lorcana_card_from_api(parsed_card.get("card_name", ""))
+              parsed_card.update({k: v for k, v in lorcana_data.items() if v})
+              parsed_card["cardmarket_slug"] = "Lorcana"
+              parsed_card["cardmarket_search_term"] = parsed_card.get('card_name', '').replace(" - ", " ")
+              
+            elif "palworld" in game_lower:
+              parsed_card["cardmarket_slug"] = "Palworld"
+              parsed_card["cardmarket_search_term"] = f"{parsed_card.get('card_name', '')} {parsed_card.get('card_number', '')}".strip()
+
 
             analyzed_cards.append(parsed_card)
           except Exception as e:
@@ -508,8 +572,8 @@ with tab1:
             "Numéro": c.get("card_number", ""),
             "Rareté": c.get("rarity", ""),
             "Coût": c.get("play_cost", ""),
-            "Langue": c.get("language", "JP"),
-            "Slug Cardmarket": c.get("cardmarket_slug", "OnePiece"),
+            "Langue": c.get("language", "FR"),
+            "Slug Cardmarket": c.get("cardmarket_slug", "Pokemon"),
             "Terme Recherche": c.get(
                 "cardmarket_search_term", c.get("card_name", "")
             ),
@@ -635,7 +699,7 @@ with tab2:
             )
             st.caption(
                 f"Rareté : {row.get('Rareté', 'N/A')} •"
-                f" {row.get('Langue', 'JP')}"
+                f" {row.get('Langue', 'FR')}"
             )
 
           with c_qty:
