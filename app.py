@@ -247,20 +247,53 @@ def _normalize_card_number(number: str) -> str:
 
 
 @st.cache_data(show_spinner=False)
-def search_riftcodex_raw(card_name: str):
-  """Appel brut à l'API Riftcodex, sans matching — utilisé pour le debug et le matching."""
-  if not card_name:
+def _champion_name_only(card_name: str) -> str:
+  """Isole le nom du champion sans le sous-titre (ex: 'Kennen - Storm of Shuriken' -> 'Kennen').
+
+  Le sous-titre peut être séparé par une virgule, un tiret simple/long, ou
+  ':' selon ce que Gemini détecte — on coupe au premier séparateur trouvé.
+  """
+  match = re.split(r"\s*[,:\-–—]\s*", card_name.strip(), maxsplit=1)
+  return match[0].strip() if match else card_name.strip()
+
+
+@st.cache_data(show_spinner=False)
+def _query_riftcodex(query: str):
+  """Appel HTTP brut à l'API Riftcodex pour une requête donnée."""
+  if not query:
     return []
   try:
     response = requests.get(
         "https://api.riftcodex.com/api/cards",
-        params={"q": card_name, "limit": 10},
+        params={"q": query, "limit": 10},
         timeout=8,
     )
     response.raise_for_status()
     return response.json().get("items", [])
   except Exception:
     return []
+
+
+def search_riftcodex_raw(card_name: str):
+  """Recherche Riftcodex avec repli sur le nom du champion seul.
+
+  La recherche de l'API ne semble pas gérer les requêtes contenant le
+  sous-titre complet de la carte (ex: "Kennen - Storm of Shuriken" renvoie 0
+  résultat) — on retente donc avec le nom du champion seul si la première
+  requête ne donne rien.
+  """
+  if not card_name:
+    return []
+
+  results = _query_riftcodex(card_name.strip())
+  if results:
+    return results
+
+  champion_only = _champion_name_only(card_name)
+  if champion_only and champion_only.lower() != card_name.strip().lower():
+    results = _query_riftcodex(champion_only)
+
+  return results
 
 
 def fetch_riftbound_card_from_riftcodex(card_name: str, card_number: str = ""):
