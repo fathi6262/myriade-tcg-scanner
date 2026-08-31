@@ -132,6 +132,18 @@ st.markdown(
         text-decoration: none !important;
         font-weight: 600;
     }
+    
+    .playset-warning {
+        color: #ef4444; 
+        font-size: 0.8rem; 
+        font-weight: bold; 
+        margin-top: 5px;
+        background: rgba(239, 68, 68, 0.1);
+        padding: 4px 8px;
+        border-radius: 8px;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        display: inline-block;
+    }
     </style>""",
     unsafe_allow_html=True,
 )
@@ -410,28 +422,37 @@ def enrich_card_data(card: dict) -> dict:
   return card
 
 
-# ================== MOTEUR IA ==================
+# ================== MOTEUR IA (BULK) ==================
 
 @st.cache_data(show_spinner=False)
 def analyze_card_gemini_cached(image_bytes):
   pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
+  # NOUVEAU PROMPT : Conçu pour forcer un tableau JSON, qu'il y ait 1 ou N cartes étalées
   prompt = """
     Tu es un expert mondial en identification de cartes TCG (Trading Card Games).
-    Analyse cette photo de carte et extrait avec une précision exacte ses données officielles :
-
-    1. "game_name" : Nom officiel du jeu (ex: "One Piece Card Game", "Riftbound", "Pokémon", "Magic: The Gathering", "Disney Lorcana", "Palworld TCG", "Yu-Gi-Oh!").
+    L'image fournie peut contenir UNE ou PLUSIEURS cartes étalées (Scan Bulk).
+    Analyse visuellement l'image pour détecter ABSOLUMENT TOUTES les cartes présentes.
+    
+    Pour CHAQUE carte identifiée, extrais ses données officielles :
+    1. "game_name" : Nom officiel du jeu.
     2. "card_name" : Nom COMPLET de la carte (titre principal + sous-titre).
     3. "set_name" : Nom ou code d'extension officiel imprimé.
-    4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
-    5. "rarity" : Rareté officielle exacte.
-    6. "play_cost" : Le coût en mana/ressource/énergie (ex: 5, 1, 10).
-    7. "color": La couleur ou le type dominant de la carte (ex: "Rouge", "Bleu", "Violet", "Améthyste", "Feu", "Ténèbres").
+    4. "card_number" : Numéro complet tel qu'imprimé.
+    5. "rarity" : Rareté officielle exacte (Pour Riftbound, regarde le logo en bas au milieu).
+    6. "play_cost" : Le coût en mana/ressource/énergie.
+    7. "color": La couleur ou le type dominant de la carte.
     8. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
-    9. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot (ex: "OnePiece", "Riftbound", "Pokemon", "Magic", "Lorcana", "Palworld").
-    10. "cardmarket_search_term" : Termes exacts pour chercher la carte sur Cardmarket (Nom anglais + Référence).
+    9. "cardmarket_slug" : Nom de la catégorie sur Cardmarket.
+    10. "cardmarket_search_term" : Termes exacts pour Cardmarket.
 
-    Génère STRICTEMENT un objet JSON valide, sans formatage markdown additionnel.
+    Génère STRICTEMENT un TABLEAU (array) JSON valide contenant un objet par carte trouvée, sans aucun formatage markdown additionnel. 
+    Même s'il n'y a qu'une seule carte, renvoie un tableau contenant un seul objet.
+    Exemple de retour attendu :
+    [
+      { "game_name": "...", "card_name": "..." },
+      { "game_name": "...", "card_name": "..." }
+    ]
     """
 
   response = gemini_model.generate_content(
@@ -441,91 +462,125 @@ def analyze_card_gemini_cached(image_bytes):
       ),
   )
 
-  return json.loads(response.text)
+  raw_text = response.text.strip()
+  try:
+      parsed = json.loads(raw_text)
+      # Force le retour en liste si l'IA s'est trompée et a renvoyé un dict unique
+      if isinstance(parsed, dict):
+          return [parsed]
+      return parsed
+  except Exception:
+      return []
 
 
 # ---------------------------------------------------------
 # 4. APPLICATION STREAMLIT
 # ---------------------------------------------------------
-tab1, tab2 = st.tabs(["📸 Scanner & Importer", "📦 Gestion du Stock"])
+tab1, tab2, tab3 = st.tabs(["📸 Scanner", "📦 Stock", "📊 Dashboard"])
 
-# --- ONGLET 1 : SCANNER ---
+# --- ONGLET 1 : SCANNER (ULTRA-BULK) ---
 with tab1:
+  st.info("💡 **Nouveauté Scan Ultra-Bulk :** Prends en photo une ou plusieurs cartes en même temps sur la table ! L'IA détectera automatiquement toutes les cartes présentes.", icon="✨")
+  
   source_type = st.radio(
       "Source de l'image :",
-      ["📷 Appareil photo", "💻 PC"],
+      ["📷 Appareil photo", "💻 PC (Fichiers)"],
       horizontal=True,
       index=0,
   )
 
-  if source_type == "💻 PC":
-    image_input = st.file_uploader("Dépose la photo de la carte", type=["jpg", "jpeg", "png", "webp"])
+  images_to_process = []
+
+  if source_type == "💻 PC (Fichiers)":
+    uploaded_files = st.file_uploader("Dépose une ou plusieurs photos (tu peux étaler tes cartes)", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
+    if uploaded_files:
+        images_to_process.extend(uploaded_files)
   else:
-    image_input = st.camera_input("Prendre la carte en photo")
+    image_input = st.camera_input("Prendre une photo de tes cartes")
+    if image_input:
+        images_to_process.append(image_input)
 
-  if image_input:
-    img_byte_arr = io.BytesIO()
-    Image.open(image_input).convert("RGB").save(img_byte_arr, format="JPEG")
-    image_bytes = img_byte_arr.getvalue()
+  if images_to_process:
+      if st.button("⚡ Analyser la/les photo(s)", use_container_width=True):
+          all_detected_cards = []
+          
+          with st.spinner("Analyse Ultra-Bulk et croisement API en cours..."):
+              for img_file in images_to_process:
+                  img_byte_arr = io.BytesIO()
+                  Image.open(img_file).convert("RGB").save(img_byte_arr, format="JPEG")
+                  img_bytes = img_byte_arr.getvalue()
+                  
+                  try:
+                      # Analyse IA (Retourne toujours une liste)
+                      cards_json = analyze_card_gemini_cached(img_bytes)
+                      
+                      # Enrichissement de chaque carte trouvée via API
+                      for c in cards_json:
+                          enriched = enrich_card_data(c)
+                          all_detected_cards.append({
+                              "Jeu": enriched.get("game_name", ""),
+                              "Nom": enriched.get("card_name", ""),
+                              "Extension": enriched.get("set_name", ""),
+                              "Numéro": enriched.get("card_number", ""),
+                              "Rareté": enriched.get("rarity", ""),
+                              "Coût": str(enriched.get("play_cost", "")),
+                              "Langue": enriched.get("language", "FR"),
+                              "Couleur": enriched.get("color", ""),
+                              "Emplacement": "Classeur 1",
+                              "Quantité": 1,
+                              "Cardmarket Slug": enriched.get("cardmarket_slug", ""),
+                              "Terme Recherche": enriched.get("cardmarket_search_term", "")
+                          })
+                  except Exception as e:
+                      st.error(f"⚠️ Erreur sur une image : {e}")
 
-    try:
-      with st.spinner("Analyse visuelle par Gemini..."):
-        card = analyze_card_gemini_cached(image_bytes)
+          st.session_state["pending_cards"] = all_detected_cards
 
-      with st.spinner("Enrichissement des métadonnées officielles..."):
-        card = enrich_card_data(card)
-
+  # Interface de validation (Data Editor)
+  if "pending_cards" in st.session_state and st.session_state["pending_cards"]:
       st.markdown("---")
-      st.subheader("✏️ Vérifier et valider les informations")
-
-      with st.form("single_add_form"):
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-          edit_game_name = st.text_input("Jeu", value=card.get("game_name", ""))
-          edit_card_name = st.text_input("Nom de la carte", value=card.get("card_name", ""))
-          edit_set_name = st.text_input("Extension", value=card.get("set_name", ""))
-          edit_card_number = st.text_input("Numéro de carte", value=card.get("card_number", ""))
-
-        with col2:
-          edit_rarity = st.text_input("Rareté", value=card.get("rarity", ""))
-          edit_couleur = st.text_input("Couleur / Type", value=card.get("color", ""))
-          edit_play_cost = st.text_input("Coût (Mana/Ressource)", value=str(card.get("play_cost", "")))
-
-        with col3:
-          edit_language = st.text_input("Langue", value=card.get("language", "FR"))
-          edit_emplacement = st.text_input("Emplacement physique", value="Classeur 1")
-          edit_quantite = st.number_input("Quantité", min_value=1, value=1, step=1)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        submit_button = st.form_submit_button("⚡ Ajouter au stock")
-
-        if submit_button:
-          cardmarket_url = build_cardmarket_url(
-              card.get("cardmarket_slug", edit_game_name),
-              card.get("cardmarket_search_term", f"{edit_card_name} {edit_card_number}"),
-          )
+      st.subheader(f"✅ {len(st.session_state['pending_cards'])} carte(s) détectée(s) ! Vérifie et valide :")
+      
+      edited_df = st.data_editor(
+          pd.DataFrame(st.session_state["pending_cards"]),
+          num_rows="dynamic",
+          use_container_width=True,
+          column_config={
+              "Quantité": st.column_config.NumberColumn("Quantité", min_value=1, step=1),
+              "Cardmarket Slug": None, # Cache les infos techniques inutiles à l'écran
+              "Terme Recherche": None
+          }
+      )
+      
+      batch_loc = st.text_input("📍 Emplacement commun pour ce lot :", value="Boîte Arrivage")
+      
+      if st.button("💾 Ajouter tout le lot au stock", use_container_width=True):
           date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-          sheet.append_row([
-              date_str,          # Col A: Date
-              edit_game_name,    # Col B: Jeu
-              edit_card_name,    # Col C: Nom
-              edit_set_name,     # Col D: Extension
-              edit_card_number,  # Col E: Numéro
-              edit_rarity,       # Col F: Rareté
-              edit_play_cost,    # Col G: Coût
-              edit_language,     # Col H: Langue
-              edit_emplacement,  # Col I: Emplacement
-              edit_quantite,     # Col J: Quantité
-              edit_couleur,      # Col K: Couleur
-              cardmarket_url,    # Col L: Lien Cardmarket
-          ])
+          rows_to_add = []
+          
+          for _, row in edited_df.iterrows():
+              cardmarket_url = build_cardmarket_url(row["Cardmarket Slug"], row["Terme Recherche"])
+              rows_to_add.append([
+                  date_str,
+                  row["Jeu"],
+                  row["Nom"],
+                  row["Extension"],
+                  row["Numéro"],
+                  row["Rareté"],
+                  row["Coût"],
+                  row["Langue"],
+                  batch_loc, # On utilise l'emplacement commun
+                  row["Quantité"],
+                  row["Couleur"],
+                  cardmarket_url
+              ])
+              
+          sheet.append_rows(rows_to_add)
           load_stock_records.clear()
-          st.success(f"✅ {edit_card_name} enregistré dans le stock !")
+          st.success("✅ Stock mis à jour avec succès !")
+          del st.session_state["pending_cards"]
+          st.rerun()
 
-    except Exception as e:
-      st.error(f"⚠️ Erreur d'analyse : {e}")
 
 # --- ONGLET 2 : INVENTAIRE ET GESTION DU STOCK ---
 with tab2:
@@ -540,15 +595,9 @@ with tab2:
       with col_m1:
         st.markdown(render_kpi("Références uniques", str(len(df)), "🎴"), unsafe_allow_html=True)
       with col_m2:
-        st.markdown(
-            render_kpi("Total Exemplaires", str(int(df["Quantité"].sum())), "📦"),
-            unsafe_allow_html=True,
-        )
+        st.markdown(render_kpi("Total Exemplaires", str(int(df["Quantité"].sum())), "📦"), unsafe_allow_html=True)
       with col_m3:
-        st.markdown(
-            render_kpi("Jeux représentés", str(df["Jeu"].nunique() if "Jeu" in df else 0), "🎮"),
-            unsafe_allow_html=True,
-        )
+        st.markdown(render_kpi("Jeux représentés", str(df["Jeu"].nunique() if "Jeu" in df else 0), "🎮"), unsafe_allow_html=True)
 
       st.markdown("<br>", unsafe_allow_html=True)
 
@@ -589,16 +638,11 @@ with tab2:
 
       filtered_df = df.copy()
 
-      if selected_game != "Tous les jeux":
-        filtered_df = filtered_df[filtered_df["Jeu"] == selected_game]
-      if selected_set != "Toutes les extensions":
-        filtered_df = filtered_df[filtered_df["Extension"] == selected_set]
-      if selected_rarity != "Toutes les raretés":
-        filtered_df = filtered_df[get_rarity_series(filtered_df) == selected_rarity]
-      if selected_color != "Toutes les couleurs":
-        filtered_df = filtered_df[filtered_df.get("Couleur", pd.Series(dtype=str)).astype(str).str.strip() == selected_color]
-      if selected_loc != "Tous les emplacements":
-        filtered_df = filtered_df[filtered_df["Emplacement"] == selected_loc]
+      if selected_game != "Tous les jeux": filtered_df = filtered_df[filtered_df["Jeu"] == selected_game]
+      if selected_set != "Toutes les extensions": filtered_df = filtered_df[filtered_df["Extension"] == selected_set]
+      if selected_rarity != "Toutes les raretés": filtered_df = filtered_df[get_rarity_series(filtered_df) == selected_rarity]
+      if selected_color != "Toutes les couleurs": filtered_df = filtered_df[filtered_df.get("Couleur", pd.Series(dtype=str)).astype(str).str.strip() == selected_color]
+      if selected_loc != "Tous les emplacements": filtered_df = filtered_df[filtered_df["Emplacement"] == selected_loc]
 
       if search_term:
         filtered_df = filtered_df[
@@ -610,7 +654,7 @@ with tab2:
       st.markdown(f"**Cartes trouvées : {len(filtered_df)}**")
 
       # ========================================================
-      # AFFICHAGE 1 : GRILLE DE CARTES
+      # AFFICHAGE 1 : GRILLE DE CARTES 
       # ========================================================
       if view_mode == "🎴 Grille de Cartes":
         cols_per_row = 3
@@ -627,6 +671,7 @@ with tab2:
               row_rarity_series = get_rarity_series(pd.DataFrame([row]))
               raw_rarity = row_rarity_series.iloc[0] if not row_rarity_series.empty else "N/A"
               raw_color = row.get("Couleur") or "N/A"
+              qty = row["Quantité"]
 
               if (raw_cost is None or pd.isna(raw_cost) or str(raw_cost).strip() in ["", "N/A"]) and str(raw_lang).isdigit():
                 cost_val = str(raw_lang)
@@ -640,6 +685,11 @@ with tab2:
               tag_color = f'<span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{raw_color}</span>' if raw_color and str(raw_color) != "N/A" else ""
               tag_rarity = f'<span style="background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;">{raw_rarity}</span>' if raw_rarity and str(raw_rarity) != "N/A" else ""
 
+              # NOUVEAUTÉ : Avertissement Playset si > 4
+              playset_html = ""
+              if qty > 4:
+                  playset_html = f"<div class='playset-warning'>⚠️ Playset dépassé ({qty}/4) — Revente conseillée</div>"
+
               card_html = f"""<div style="text-align: center; padding: 5px 0px 15px 0px;">
 <h3 style="margin: 0px 0px 5px 0px; font-family: 'Rajdhani', sans-serif; color: #ffffff; font-size: 1.6rem; line-height: 1.1;">{row.get('Nom', '')}</h3>
 <div style="color: #00f0ff; font-weight: 700; font-size: 1rem; letter-spacing: 1px; margin-bottom: 12px;">{row.get('Numéro', '')}</div>
@@ -652,11 +702,12 @@ with tab2:
 {tag_color}
 <span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{lang_val}</span>
 </div>
-<div style="font-family: 'Rajdhani', sans-serif; font-size: 3.5rem; font-weight: 700; line-height: 1; margin-bottom: 5px;">
-<span style="background: linear-gradient(90deg, #00f0ff 0%, #a855f7 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">{row['Quantité']}</span>
+<div style="font-family: 'Rajdhani', sans-serif; font-size: 3.5rem; font-weight: 700; line-height: 1; margin-bottom: 0px;">
+<span style="background: linear-gradient(90deg, #00f0ff 0%, #a855f7 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">{qty}</span>
 <span style="font-size: 1.2rem; color: #94a3b8; font-weight: 600; vertical-align: middle;">ex.</span>
 </div>
-<div style="font-size: 0.85rem; color: #64748b; margin-top: 5px; margin-bottom: 5px;">📍 {row.get('Emplacement', 'N/A')}</div>
+{playset_html}
+<div style="font-size: 0.85rem; color: #64748b; margin-top: 10px; margin-bottom: 5px;">📍 {row.get('Emplacement', 'N/A')}</div>
 </div>"""
 
               with cols[j]:
@@ -665,11 +716,11 @@ with tab2:
 
                   btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
                   if btn_c1.button("➕", key=f"add_grid_{idx}", use_container_width=True):
-                    update_qty_cell(idx, row["Quantité"] + 1)
+                    update_qty_cell(idx, qty + 1)
                     st.rerun()
 
                   if btn_c2.button("➖", key=f"sub_grid_{idx}", use_container_width=True):
-                    if row["Quantité"] > 1: update_qty_cell(idx, row["Quantité"] - 1)
+                    if qty > 1: update_qty_cell(idx, qty - 1)
                     else: delete_sheet_row(idx)
                     st.rerun()
 
@@ -681,15 +732,12 @@ with tab2:
                   else: btn_c4.button("↗️", key=f"no_link_{idx}", disabled=True, use_container_width=True)
 
       # ========================================================
-      # AFFICHAGE 2 : TABLEAU DENSE AVEC CONVERTISSEUR DE LIEN DYNAMIQUE
+      # AFFICHAGE 2 : TABLEAU
       # ========================================================
       else:
         display_df = filtered_df.copy()
-
-        # Normalisation automatique des noms de colonnes pour le composant d'édition Streamlit
         if "Prix Est. (€)" in display_df.columns and "Lien Cardmarket" not in display_df.columns:
           display_df = display_df.rename(columns={"Prix Est. (€)": "Lien Cardmarket"})
-
         if "État" in display_df.columns and "Langue" not in display_df.columns:
           display_df = display_df.rename(columns={"Langue": "Coût", "État": "Langue"})
 
@@ -708,3 +756,47 @@ with tab2:
 
   except Exception as e:
     st.error(f"Erreur lors du chargement du stock : {e}")
+
+
+# --- ONGLET 3 : DASHBOARD (ANALYTICS) ---
+with tab3:
+    try:
+        records = load_stock_records()
+        if records:
+            df_dash = pd.DataFrame(records)
+            df_dash["Quantité"] = pd.to_numeric(df_dash.get("Quantité", 1), errors="coerce").fillna(1).astype(int)
+            
+            st.subheader("📊 Répartition de la collection")
+            
+            # Graphiques de répartition simples, natifs et propres
+            col_chart1, col_chart2 = st.columns(2)
+            
+            with col_chart1:
+                st.markdown("**Répartition par Jeu**")
+                game_counts = df_dash.groupby("Jeu")["Quantité"].sum()
+                st.bar_chart(game_counts, color="#a855f7")
+                
+            with col_chart2:
+                st.markdown("**Répartition par Rareté**")
+                rarity_series = get_rarity_series(df_dash)
+                df_dash["Temp_Rarity"] = rarity_series
+                rarity_counts = df_dash.groupby("Temp_Rarity")["Quantité"].sum()
+                st.bar_chart(rarity_counts, color="#00f0ff")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+            col_chart3, col_chart4 = st.columns(2)
+            
+            with col_chart3:
+                st.markdown("**Répartition par Couleur**")
+                color_counts = df_dash.groupby("Couleur")["Quantité"].sum()
+                st.bar_chart(color_counts, color="#eab308")
+                
+            with col_chart4:
+                st.markdown("**Top 5 des cartes les plus possédées**")
+                top_cards = df_dash.groupby(['Nom'])['Quantité'].sum().nlargest(5)
+                st.bar_chart(top_cards, color="#3b82f6")
+                
+        else:
+            st.info("Ajoute des cartes à ton stock pour débloquer les statistiques !")
+    except Exception as e:
+        st.error(f"Erreur de génération du tableau de bord : {e}")
