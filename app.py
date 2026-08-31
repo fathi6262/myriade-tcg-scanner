@@ -20,8 +20,7 @@ st.set_page_config(
 )
 
 st.markdown(
-    """
-    <style>
+    """<style>
     @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=Inter:wght@400;600&display=swap');
 
     .stApp {
@@ -111,7 +110,6 @@ st.markdown(
         box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
     }
 
-    /* Uniformisation de tous les boutons de l'interface */
     .stButton > button, div[data-testid="stForm"] button, div[data-testid="stLinkButton"] a {
         background: linear-gradient(90deg, #7c3aed 0%, #0284c7 100%) !important;
         color: #ffffff !important;
@@ -134,8 +132,7 @@ st.markdown(
         text-decoration: none !important;
         font-weight: 600;
     }
-    </style>
-""",
+    </style>""",
     unsafe_allow_html=True,
 )
 
@@ -182,12 +179,10 @@ def load_stock_records():
 
 
 def render_kpi(label: str, value: str, icon: str = ""):
-  return f"""
-    <div class="kpi-card">
-        <div class="kpi-label">{icon} {label}</div>
-        <div class="kpi-value">{value}</div>
-    </div>
-    """
+  return f"""<div class="kpi-card">
+<div class="kpi-label">{icon} {label}</div>
+<div class="kpi-value">{value}</div>
+</div>"""
 
 
 def build_cardmarket_url(slug: str, search_term: str) -> str:
@@ -608,7 +603,7 @@ with tab2:
       st.markdown(f"**Cartes trouvées : {len(filtered_df)}**")
 
       # ========================================================
-      # AFFICHAGE 1 : GRILLE DE CARTES PROFESSIONNELLES
+      # AFFICHAGE 1 : GRILLE DE CARTES (FORMATTAGE HTML NET SANS MARKDOWN INDENTÉ)
       # ========================================================
       if view_mode == "🎴 Grille de Cartes":
         cols_per_row = 3
@@ -619,7 +614,6 @@ with tab2:
               idx = filtered_df.index[i + j]
               row = filtered_df.iloc[i + j]
 
-              # Extractions et sécurisations des données
               raw_cost = row.get("Coût")
               raw_lang = row.get("Langue")
               raw_etat = row.get("État")
@@ -636,58 +630,44 @@ with tab2:
 
               link_url = row.get("Lien Cardmarket") or row.get("Prix Est. (€)") or "#"
               
-              # Préparation des badges visuels si la donnée existe
               tag_color = f'<span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{raw_color}</span>' if raw_color and str(raw_color) != "N/A" else ""
               tag_rarity = f'<span style="background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;">{raw_rarity}</span>' if raw_rarity and str(raw_rarity) != "N/A" else ""
 
+              # Rendu HTML collé à gauche (sans espaces de début de ligne) pour éviter la détection de bloc de code Markdown
+              card_html = f"""<div style="text-align: center; padding: 5px 0px 15px 0px;">
+<h3 style="margin: 0px 0px 5px 0px; font-family: 'Rajdhani', sans-serif; color: #ffffff; font-size: 1.6rem; line-height: 1.1;">{row.get('Nom', '')}</h3>
+<div style="color: #00f0ff; font-weight: 700; font-size: 1rem; letter-spacing: 1px; margin-bottom: 12px;">{row.get('Numéro', '')}</div>
+<div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px; line-height: 1.3;">
+{row.get('Jeu', '')}<br><span style="font-size: 0.75rem; color: #64748b;">{row.get('Extension', '')}</span>
+</div>
+<div style="display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;">
+<span style="background: rgba(0, 240, 255, 0.05); border: 1px solid rgba(0, 240, 255, 0.3); color: #00f0ff; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;">Coût : {cost_val}</span>
+{tag_rarity}
+{tag_color}
+<span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{lang_val}</span>
+</div>
+<div style="font-family: 'Rajdhani', sans-serif; font-size: 3.5rem; font-weight: 700; line-height: 1; margin-bottom: 5px;">
+<span style="background: linear-gradient(90deg, #00f0ff 0%, #a855f7 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">{row['Quantité']}</span>
+<span style="font-size: 1.2rem; color: #94a3b8; font-weight: 600; vertical-align: middle;">ex.</span>
+</div>
+<div style="font-size: 0.85rem; color: #64748b; margin-top: 5px; margin-bottom: 5px;">📍 {row.get('Emplacement', 'N/A')}</div>
+</div>"""
+
               with cols[j]:
                 with st.container(border=True):
-                  # BLOC HTML : Rendu centralisé et mis en valeur
-                  st.markdown(f"""
-                  <div style="text-align: center; padding: 5px 0px 15px 0px;">
-                      
-                      <!-- TITRE ET REF -->
-                      <h3 style="margin: 0px 0px 5px 0px; font-family: 'Rajdhani', sans-serif; color: #ffffff; font-size: 1.6rem; line-height: 1.1;">{row.get('Nom', '')}</h3>
-                      <div style="color: #00f0ff; font-weight: 700; font-size: 1rem; letter-spacing: 1px; margin-bottom: 12px;">{row.get('Numéro', '')}</div>
-                      
-                      <!-- SOUS-TITRE (Jeu & Extension) -->
-                      <div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px; line-height: 1.3;">
-                          {row.get('Jeu', '')} <br>
-                          <span style="font-size: 0.75rem; color: #64748b;">{row.get('Extension', '')}</span>
-                      </div>
-                      
-                      <!-- TAGS / PILULES -->
-                      <div style="display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;">
-                          <span style="background: rgba(0, 240, 255, 0.05); border: 1px solid rgba(0, 240, 255, 0.3); color: #00f0ff; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;">Coût : {cost_val}</span>
-                          {tag_rarity}
-                          {tag_color}
-                          <span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{lang_val}</span>
-                      </div>
-                      
-                      <!-- QUANTITÉ GEANTE -->
-                      <div style="font-family: 'Rajdhani', sans-serif; font-size: 3.5rem; font-weight: 700; line-height: 1; margin-bottom: 5px;">
-                          <span style="background: linear-gradient(90deg, #00f0ff 0%, #a855f7 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">{row['Quantité']}</span>
-                          <span style="font-size: 1.2rem; color: #94a3b8; font-weight: 600; vertical-align: middle;">ex.</span>
-                      </div>
-                      
-                      <!-- EMPLACEMENT -->
-                      <div style="font-size: 0.85rem; color: #64748b; margin-top: 5px; margin-bottom: 5px;">📍 {row.get('Emplacement', 'N/A')}</div>
-                      
-                  </div>
-                  """, unsafe_allow_html=True)
+                  st.markdown(card_html, unsafe_allow_html=True)
 
-                  # BOUTONS D'ACTION (STREAMLIT NATIVES)
                   btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
-                  if btn_c1.button("➕", key=f"add_{idx}", use_container_width=True):
+                  if btn_c1.button("➕", key=f"add_grid_{idx}", use_container_width=True):
                     update_qty_cell(idx, row["Quantité"] + 1)
                     st.rerun()
 
-                  if btn_c2.button("➖", key=f"sub_{idx}", use_container_width=True):
+                  if btn_c2.button("➖", key=f"sub_grid_{idx}", use_container_width=True):
                     if row["Quantité"] > 1: update_qty_cell(idx, row["Quantité"] - 1)
                     else: delete_sheet_row(idx)
                     st.rerun()
 
-                  if btn_c3.button("🗑️", key=f"del_{idx}", use_container_width=True):
+                  if btn_c3.button("🗑️", key=f"del_grid_{idx}", use_container_width=True):
                     delete_sheet_row(idx)
                     st.rerun()
 
