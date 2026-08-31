@@ -132,18 +132,6 @@ st.markdown(
         text-decoration: none !important;
         font-weight: 600;
     }
-    
-    .playset-warning {
-        color: #ef4444; 
-        font-size: 0.8rem; 
-        font-weight: bold; 
-        margin-top: 5px;
-        background: rgba(239, 68, 68, 0.1);
-        padding: 4px 8px;
-        border-radius: 8px;
-        border: 1px solid rgba(239, 68, 68, 0.3);
-        display: inline-block;
-    }
     </style>""",
     unsafe_allow_html=True,
 )
@@ -211,7 +199,6 @@ def sheet_row_index(pandas_idx: int) -> int:
 
 def update_qty_cell(pandas_idx: int, new_qty):
   row = sheet_row_index(pandas_idx)
-  # Conversion explicite en int Python natif pour éviter l'erreur de sérialisation JSON int64
   sheet.update_acell(f"{QTY_COL_LETTER}{row}", int(new_qty))
   load_stock_records.clear()
 
@@ -431,15 +418,15 @@ def analyze_card_gemini_cached(image_bytes):
 
   prompt = """
     Tu es un expert mondial en identification de cartes TCG (Trading Card Games).
-    L'image fournie peut contenir UNE ou PLUSIEURS cartes étalées (Scan Bulk).
-    Analyse visuellement l'image pour détecter ABSOLUMENT TOUTES les cartes présentes.
+    L'image fournie contient UNE ou PLUSIEURS cartes étalées (Scan Bulk).
+    Analyse visuellement l'image en ultra-haute définition. Zoome virtuellement sur CHAQUE carte pour lire les petits textes, les numéros de série (souvent minuscules en bas) et les logos de rareté.
     
     Pour CHAQUE carte identifiée, extrais ses données officielles :
     1. "game_name" : Nom officiel du jeu.
     2. "card_name" : Nom COMPLET de la carte (titre principal + sous-titre).
     3. "set_name" : Nom ou code d'extension officiel imprimé.
-    4. "card_number" : Numéro complet tel qu'imprimé.
-    5. "rarity" : Rareté officielle exacte (Pour Riftbound, regarde le logo en bas au milieu).
+    4. "card_number" : Numéro complet tel qu'imprimé (ex: OP01-120, 156/166). Fais très attention à ne pas confondre O et 0.
+    5. "rarity" : Rareté officielle exacte (Pour Riftbound, regarde minutieusement le logo géométrique tout en bas au milieu).
     6. "play_cost" : Le coût en mana/ressource/énergie.
     7. "color": La couleur ou le type dominant de la carte.
     8. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
@@ -447,7 +434,7 @@ def analyze_card_gemini_cached(image_bytes):
     10. "cardmarket_search_term" : Termes exacts pour Cardmarket.
 
     Génère STRICTEMENT un TABLEAU (array) JSON valide contenant un objet par carte trouvée, sans aucun formatage markdown additionnel. 
-    Même s'il n'y a qu'une seule carte, renvoie un tableau contenant un seul objet.
+    Même s'il n'y a qu'une seule carte sur la photo, renvoie un tableau contenant un seul objet.
     """
 
   response = gemini_model.generate_content(
@@ -474,7 +461,7 @@ tab1, tab2, tab3 = st.tabs(["📸 Scanner", "📦 Stock", "📊 Dashboard"])
 
 # --- ONGLET 1 : SCANNER (ULTRA-BULK) ---
 with tab1:
-  st.info("💡 **Scan Ultra-Bulk :** Tu peux étaler plusieurs cartes sur une seule photo.", icon="✨")
+  st.info("💡 **Scan Ultra-Bulk :** Tu peux étaler plusieurs cartes sur une seule photo. Pour une meilleure précision, assure-toi d'avoir une bonne luminosité.", icon="✨")
   
   source_type = st.radio(
       "Source de l'image :",
@@ -501,7 +488,8 @@ with tab1:
           with st.spinner("Analyse Ultra-Bulk et croisement API en cours..."):
               for img_file in images_to_process:
                   img_byte_arr = io.BytesIO()
-                  Image.open(img_file).convert("RGB").save(img_byte_arr, format="JPEG")
+                  # SAUVEGARDE EN PNG POUR ÉVITER TOUTE PERTE DE QUALITÉ / COMPRESSION JPEG
+                  Image.open(img_file).convert("RGB").save(img_byte_arr, format="PNG")
                   img_bytes = img_byte_arr.getvalue()
                   
                   try:
@@ -676,10 +664,6 @@ with tab2:
               tag_color = f'<span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{raw_color}</span>' if raw_color and str(raw_color) != "N/A" else ""
               tag_rarity = f'<span style="background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;">{raw_rarity}</span>' if raw_rarity and str(raw_rarity) != "N/A" else ""
 
-              playset_html = ""
-              if qty > 4:
-                  playset_html = f"<div class='playset-warning'>⚠️ Playset dépassé ({qty}/4) — Revente conseillée</div>"
-
               card_html = f"""<div style="text-align: center; padding: 5px 0px 15px 0px;">
 <h3 style="margin: 0px 0px 5px 0px; font-family: 'Rajdhani', sans-serif; color: #ffffff; font-size: 1.6rem; line-height: 1.1;">{row.get('Nom', '')}</h3>
 <div style="color: #00f0ff; font-weight: 700; font-size: 1rem; letter-spacing: 1px; margin-bottom: 12px;">{row.get('Numéro', '')}</div>
@@ -696,7 +680,6 @@ with tab2:
 <span style="background: linear-gradient(90deg, #00f0ff 0%, #a855f7 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">{qty}</span>
 <span style="font-size: 1.2rem; color: #94a3b8; font-weight: 600; vertical-align: middle;">ex.</span>
 </div>
-{playset_html}
 <div style="font-size: 0.85rem; color: #64748b; margin-top: 10px; margin-bottom: 5px;">📍 {row.get('Emplacement', 'N/A')}</div>
 </div>"""
 
