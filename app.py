@@ -111,7 +111,8 @@ st.markdown(
         box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
     }
 
-    .stButton > button, div[data-testid="stForm"] button {
+    /* Uniformisation de tous les boutons de l'interface */
+    .stButton > button, div[data-testid="stForm"] button, div[data-testid="stLinkButton"] a {
         background: linear-gradient(90deg, #7c3aed 0%, #0284c7 100%) !important;
         color: #ffffff !important;
         border: none !important;
@@ -123,7 +124,7 @@ st.markdown(
         transition: all 0.2s ease !important;
     }
 
-    .stButton > button:hover, div[data-testid="stForm"] button:hover {
+    .stButton > button:hover, div[data-testid="stForm"] button:hover, div[data-testid="stLinkButton"] a:hover {
         box-shadow: 0 0 20px rgba(168, 85, 247, 0.8) !important;
         transform: translateY(-1px);
     }
@@ -233,49 +234,38 @@ def _normalize_card_text(text: str) -> str:
   text = re.sub(r"\s+", " ", text)
   return text.strip()
 
-
 def _extract_collector_number(number: str):
   match = re.search(r"\d+", number or "")
   return int(match.group(0)) if match else None
 
-
 def _champion_name_only(card_name: str) -> str:
   parts = re.split(r"\s*[,:\-–—]\s*", card_name.strip(), maxsplit=1)
   return parts[0].strip() if parts else card_name.strip()
-
 
 @st.cache_data(show_spinner=False)
 def _query_riftcodex_by_name(name: str):
   if not name:
     return []
   try:
-    response = requests.get(
-        "https://api.riftcodex.com/cards/name",
-        params={"fuzzy": name, "size": 20},
-        timeout=8,
-    )
+    response = requests.get("https://api.riftcodex.com/cards/name", params={"fuzzy": name, "size": 20}, timeout=8)
     response.raise_for_status()
     return response.json().get("items", [])
   except Exception:
     return []
 
-
 def search_riftcodex_raw(card_name: str):
   if not card_name:
     return []
   results = _query_riftcodex_by_name(card_name.strip())
-  if results:
-    return results
+  if results: return results
   champion_only = _champion_name_only(card_name)
   if champion_only and champion_only.lower() != card_name.strip().lower():
     results = _query_riftcodex_by_name(champion_only)
   return results
 
-
 def fetch_riftbound_card_from_riftcodex(card_name: str, card_number: str = ""):
   results = search_riftcodex_raw(card_name)
-  if not results:
-    return {}
+  if not results: return {}
 
   best_match = None
   target_number = _extract_collector_number(card_number)
@@ -286,29 +276,19 @@ def fetch_riftbound_card_from_riftcodex(card_name: str, card_number: str = ""):
       best_match = number_matches[0]
     elif len(number_matches) > 1:
       target_name = _normalize_card_text(card_name)
-      best_match = next(
-          (c for c in number_matches if _normalize_card_text(c.get("name", "")) == target_name),
-          None,
-      )
+      best_match = next((c for c in number_matches if _normalize_card_text(c.get("name", "")) == target_name), None)
 
   if best_match is None:
     target_name = _normalize_card_text(card_name)
     exact_matches = [c for c in results if _normalize_card_text(c.get("name", "")) == target_name]
-    if len(exact_matches) == 1:
-      best_match = exact_matches[0]
+    if len(exact_matches) == 1: best_match = exact_matches[0]
 
   if best_match is None:
     target_name = _normalize_card_text(card_name)
-    prefix_matches = [
-        c for c in results
-        if _normalize_card_text(c.get("name", ""))
-        and target_name.startswith(_normalize_card_text(c.get("name", "")))
-    ]
-    if len(prefix_matches) == 1:
-      best_match = prefix_matches[0]
+    prefix_matches = [c for c in results if _normalize_card_text(c.get("name", "")) and target_name.startswith(_normalize_card_text(c.get("name", "")))]
+    if len(prefix_matches) == 1: best_match = prefix_matches[0]
 
-  if best_match is None:
-    return {}
+  if best_match is None: return {}
 
   classification = best_match.get("classification", {}) or {}
   attributes = best_match.get("attributes", {}) or {}
@@ -325,23 +305,18 @@ def fetch_riftbound_card_from_riftcodex(card_name: str, card_number: str = ""):
 
 @st.cache_data(show_spinner=False)
 def fetch_onepiece_card_from_optcgapi(card_id: str):
-  if not card_id:
-    return {}
+  if not card_id: return {}
   card_id = card_id.upper().strip().split()[0]
-  if card_id.startswith("ST"):
-    url = f"https://optcgapi.com/api/decks/card/{card_id}/"
-  elif card_id.startswith("P"):
-    url = f"https://optcgapi.com/api/promos/card/{card_id}/"
-  else:
-    url = f"https://optcgapi.com/api/sets/card/{card_id}/"
+  if card_id.startswith("ST"): url = f"https://optcgapi.com/api/decks/card/{card_id}/"
+  elif card_id.startswith("P"): url = f"https://optcgapi.com/api/promos/card/{card_id}/"
+  else: url = f"https://optcgapi.com/api/sets/card/{card_id}/"
 
   try:
     response = requests.get(url, timeout=8)
     response.raise_for_status()
     data = response.json()
     best_match = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
-    if not best_match:
-      return {}
+    if not best_match: return {}
 
     details = {}
     if "name" in best_match: details["card_name"] = str(best_match["name"])
@@ -350,25 +325,18 @@ def fetch_onepiece_card_from_optcgapi(card_id: str):
     if "cost" in best_match: details["play_cost"] = str(best_match["cost"])
     if "color" in best_match: details["color"] = str(best_match["color"])
     return details
-  except Exception:
-    return {}
+  except Exception: return {}
 
 
 @st.cache_data(show_spinner=False)
 def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
-  if not card_name:
-    return {}
+  if not card_name: return {}
   try:
     clean_name = card_name.split()[0].replace("é", "e").strip()
-    response = requests.get(
-        "https://api.pokemontcg.io/v2/cards",
-        params={"q": f'name:"{clean_name}"'},
-        timeout=8,
-    )
+    response = requests.get("https://api.pokemontcg.io/v2/cards", params={"q": f'name:"{clean_name}"'}, timeout=8)
     response.raise_for_status()
     results = response.json().get("data", [])
-    if not results:
-      return {}
+    if not results: return {}
 
     best_match = results[0]
     if card_number:
@@ -384,27 +352,23 @@ def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
     if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
     if "types" in best_match: details["color"] = " / ".join(best_match["types"])
     return details
-  except Exception:
-    return {}
+  except Exception: return {}
 
 
 @st.cache_data(show_spinner=False)
 def fetch_lorcana_card_from_api(card_name: str):
-  if not card_name:
-    return {}
+  if not card_name: return {}
   try:
     clean_name = card_name.split("-")[0].strip()
     response = requests.get(f"https://api.lorcana-api.com/cards/fetch?search=name~{clean_name}", timeout=8)
     response.raise_for_status()
     results = response.json()
-    if not results or not isinstance(results, list):
-      return {}
+    if not results or not isinstance(results, list): return {}
 
     best_match = results[0]
     details = {}
     full_name = str(best_match.get("Name", ""))
-    if best_match.get("Subtitle"):
-      full_name += f" - {best_match['Subtitle']}"
+    if best_match.get("Subtitle"): full_name += f" - {best_match['Subtitle']}"
     if full_name: details["card_name"] = full_name
 
     if best_match.get("Set_Name"): details["set_name"] = str(best_match["Set_Name"])
@@ -413,17 +377,14 @@ def fetch_lorcana_card_from_api(card_name: str):
     if best_match.get("Card_Num"): details["card_number"] = str(best_match["Card_Num"])
     if best_match.get("Color"): details["color"] = str(best_match["Color"])
     return details
-  except Exception:
-    return {}
+  except Exception: return {}
 
 
 def enrich_card_data(card: dict) -> dict:
   game_lower = card.get("game_name", "").lower()
 
   if "riftbound" in game_lower:
-    riftcodex_data = fetch_riftbound_card_from_riftcodex(
-        card.get("card_name", ""), card.get("card_number", "")
-    )
+    riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""), card.get("card_number", ""))
     card["rarity"] = riftcodex_data.get("rarity", "")
     card.update({k: v for k, v in riftcodex_data.items() if v and k != "rarity"})
     card["cardmarket_slug"] = "Riftbound"
@@ -503,9 +464,7 @@ with tab1:
   )
 
   if source_type == "💻 PC":
-    image_input = st.file_uploader(
-        "Dépose la photo de la carte", type=["jpg", "jpeg", "png", "webp"]
-    )
+    image_input = st.file_uploader("Dépose la photo de la carte", type=["jpg", "jpeg", "png", "webp"])
   else:
     image_input = st.camera_input("Prendre la carte en photo")
 
@@ -598,14 +557,13 @@ with tab2:
 
       st.markdown("<br>", unsafe_allow_html=True)
 
-      # BARRE DE FILTRES
       st.subheader("🔍 Filtrer et gérer le stock")
       
       top_f1, top_f2 = st.columns([3, 1])
       with top_f1:
         search_term = st.text_input("Recherche", placeholder="Nom, Couleur, Numéro...")
       with top_f2:
-        view_mode = st.radio("Style d'affichage :", ["🎴 Grille (3 cols)", "📋 Tableau"], horizontal=True)
+        view_mode = st.radio("Style d'affichage :", ["🎴 Grille de Cartes", "📋 Tableau condensé"], horizontal=True)
 
       f2, f3, f4, f5 = st.columns(4)
 
@@ -633,13 +591,10 @@ with tab2:
 
       if selected_game != "Tous les jeux":
         filtered_df = filtered_df[filtered_df["Jeu"] == selected_game]
-
       if selected_set != "Toutes les extensions":
         filtered_df = filtered_df[filtered_df["Extension"] == selected_set]
-
       if selected_rarity != "Toutes les raretés":
         filtered_df = filtered_df[get_rarity_series(filtered_df) == selected_rarity]
-
       if selected_loc != "Tous les emplacements":
         filtered_df = filtered_df[filtered_df["Emplacement"] == selected_loc]
 
@@ -652,8 +607,10 @@ with tab2:
 
       st.markdown(f"**Cartes trouvées : {len(filtered_df)}**")
 
-      # AFFICHAGE 1 : GRILLE COMPACTE EN 3 COLONNES
-      if view_mode == "🎴 Grille (3 cols)":
+      # ========================================================
+      # AFFICHAGE 1 : GRILLE DE CARTES PROFESSIONNELLES
+      # ========================================================
+      if view_mode == "🎴 Grille de Cartes":
         cols_per_row = 3
         for i in range(0, len(filtered_df), cols_per_row):
           cols = st.columns(cols_per_row)
@@ -662,6 +619,7 @@ with tab2:
               idx = filtered_df.index[i + j]
               row = filtered_df.iloc[i + j]
 
+              # Extractions et sécurisations des données
               raw_cost = row.get("Coût")
               raw_lang = row.get("Langue")
               raw_etat = row.get("État")
@@ -677,36 +635,68 @@ with tab2:
                 lang_val = str(raw_lang) if pd.notna(raw_lang) and str(raw_lang) != "" else "FR"
 
               link_url = row.get("Lien Cardmarket") or row.get("Prix Est. (€)") or "#"
+              
+              # Préparation des badges visuels si la donnée existe
+              tag_color = f'<span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{raw_color}</span>' if raw_color and str(raw_color) != "N/A" else ""
+              tag_rarity = f'<span style="background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;">{raw_rarity}</span>' if raw_rarity and str(raw_rarity) != "N/A" else ""
 
               with cols[j]:
                 with st.container(border=True):
-                  st.markdown(f"**{row.get('Nom', '')}** `{row.get('Numéro', '')}`")
-                  st.caption(f"{row.get('Jeu', '')} • {row.get('Extension', '')}")
-                  st.markdown(f"📍 `{row.get('Emplacement', 'N/A')}` | Coût : `{cost_val}`")
-                  color_txt = f" • {raw_color}" if raw_color != "N/A" else ""
-                  st.caption(f"Rareté : {raw_rarity}{color_txt} • {lang_val}")
+                  # BLOC HTML : Rendu centralisé et mis en valeur
+                  st.markdown(f"""
+                  <div style="text-align: center; padding: 5px 0px 15px 0px;">
+                      
+                      <!-- TITRE ET REF -->
+                      <h3 style="margin: 0px 0px 5px 0px; font-family: 'Rajdhani', sans-serif; color: #ffffff; font-size: 1.6rem; line-height: 1.1;">{row.get('Nom', '')}</h3>
+                      <div style="color: #00f0ff; font-weight: 700; font-size: 1rem; letter-spacing: 1px; margin-bottom: 12px;">{row.get('Numéro', '')}</div>
+                      
+                      <!-- SOUS-TITRE (Jeu & Extension) -->
+                      <div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px; line-height: 1.3;">
+                          {row.get('Jeu', '')} <br>
+                          <span style="font-size: 0.75rem; color: #64748b;">{row.get('Extension', '')}</span>
+                      </div>
+                      
+                      <!-- TAGS / PILULES -->
+                      <div style="display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;">
+                          <span style="background: rgba(0, 240, 255, 0.05); border: 1px solid rgba(0, 240, 255, 0.3); color: #00f0ff; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;">Coût : {cost_val}</span>
+                          {tag_rarity}
+                          {tag_color}
+                          <span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{lang_val}</span>
+                      </div>
+                      
+                      <!-- QUANTITÉ GEANTE -->
+                      <div style="font-family: 'Rajdhani', sans-serif; font-size: 3.5rem; font-weight: 700; line-height: 1; margin-bottom: 5px;">
+                          <span style="background: linear-gradient(90deg, #00f0ff 0%, #a855f7 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">{row['Quantité']}</span>
+                          <span style="font-size: 1.2rem; color: #94a3b8; font-weight: 600; vertical-align: middle;">ex.</span>
+                      </div>
+                      
+                      <!-- EMPLACEMENT -->
+                      <div style="font-size: 0.85rem; color: #64748b; margin-top: 5px; margin-bottom: 5px;">📍 {row.get('Emplacement', 'N/A')}</div>
+                      
+                  </div>
+                  """, unsafe_allow_html=True)
 
-                  c_q, c_a1, c_a2, c_a3, c_l = st.columns([2, 1, 1, 1, 1])
-                  c_q.markdown(f"**{row['Quantité']} ex.**")
-
-                  if c_a1.button("➕", key=f"add_grid_{idx}"):
+                  # BOUTONS D'ACTION (STREAMLIT NATIVES)
+                  btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
+                  if btn_c1.button("➕", key=f"add_{idx}", use_container_width=True):
                     update_qty_cell(idx, row["Quantité"] + 1)
                     st.rerun()
 
-                  if c_a2.button("➖", key=f"sub_grid_{idx}"):
-                    if row["Quantité"] > 1:
-                      update_qty_cell(idx, row["Quantité"] - 1)
-                    else:
-                      delete_sheet_row(idx)
+                  if btn_c2.button("➖", key=f"sub_{idx}", use_container_width=True):
+                    if row["Quantité"] > 1: update_qty_cell(idx, row["Quantité"] - 1)
+                    else: delete_sheet_row(idx)
                     st.rerun()
 
-                  if c_a3.button("🗑️", key=f"del_grid_{idx}"):
+                  if btn_c3.button("🗑️", key=f"del_{idx}", use_container_width=True):
                     delete_sheet_row(idx)
                     st.rerun()
 
-                  c_l.markdown(f"<a href='{link_url}' target='_blank'>↗ Voir</a>", unsafe_allow_html=True)
+                  if link_url != "#": btn_c4.link_button("↗️", link_url, use_container_width=True)
+                  else: btn_c4.button("↗️", key=f"no_link_{idx}", disabled=True, use_container_width=True)
 
+      # ========================================================
       # AFFICHAGE 2 : TABLEAU
+      # ========================================================
       else:
         display_df = filtered_df.copy()
         st.data_editor(
