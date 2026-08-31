@@ -556,11 +556,12 @@ with tab2:
       
       top_f1, top_f2 = st.columns([3, 1])
       with top_f1:
-        search_term = st.text_input("Recherche", placeholder="Nom, Couleur, Numéro...")
+        search_term = st.text_input("Recherche textuelle", placeholder="Chercher un nom, numéro, ou couleur...")
       with top_f2:
         view_mode = st.radio("Style d'affichage :", ["🎴 Grille de Cartes", "📋 Tableau condensé"], horizontal=True)
 
-      f2, f3, f4, f5 = st.columns(4)
+      # Ajout du filtre couleur : nous avons maintenant 5 colonnes de filtres
+      f2, f3, f4, f5, f6 = st.columns(5)
 
       with f2:
         list_jeux = ["Tous les jeux"] + sorted([str(j) for j in df["Jeu"].unique() if j])
@@ -579,6 +580,12 @@ with tab2:
         selected_rarity = st.selectbox("Rareté", list_rarities)
 
       with f5:
+        # Filtre Couleur
+        raw_colors = [str(c).strip() for c in temp_df.get("Couleur", pd.Series()).unique() if c and str(c).strip() not in ["nan", "None", "N/A", ""]]
+        list_colors = ["Toutes les couleurs"] + sorted(list(set(raw_colors)))
+        selected_color = st.selectbox("Couleur", list_colors)
+
+      with f6:
         list_locs = ["Tous les emplacements"] + sorted([str(l) for l in temp_df.get("Emplacement", pd.Series()).unique() if l])
         selected_loc = st.selectbox("Emplacement", list_locs)
 
@@ -590,6 +597,8 @@ with tab2:
         filtered_df = filtered_df[filtered_df["Extension"] == selected_set]
       if selected_rarity != "Toutes les raretés":
         filtered_df = filtered_df[get_rarity_series(filtered_df) == selected_rarity]
+      if selected_color != "Toutes les couleurs":
+        filtered_df = filtered_df[filtered_df.get("Couleur", pd.Series(dtype=str)).astype(str).str.strip() == selected_color]
       if selected_loc != "Tous les emplacements":
         filtered_df = filtered_df[filtered_df["Emplacement"] == selected_loc]
 
@@ -633,7 +642,6 @@ with tab2:
               tag_color = f'<span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{raw_color}</span>' if raw_color and str(raw_color) != "N/A" else ""
               tag_rarity = f'<span style="background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;">{raw_rarity}</span>' if raw_rarity and str(raw_rarity) != "N/A" else ""
 
-              # Rendu HTML collé à gauche (sans espaces de début de ligne) pour éviter la détection de bloc de code Markdown
               card_html = f"""<div style="text-align: center; padding: 5px 0px 15px 0px;">
 <h3 style="margin: 0px 0px 5px 0px; font-family: 'Rajdhani', sans-serif; color: #ffffff; font-size: 1.6rem; line-height: 1.1;">{row.get('Nom', '')}</h3>
 <div style="color: #00f0ff; font-weight: 700; font-size: 1rem; letter-spacing: 1px; margin-bottom: 12px;">{row.get('Numéro', '')}</div>
