@@ -213,6 +213,18 @@ def delete_sheet_row(pandas_idx: int):
   load_stock_records.clear()
 
 
+def get_rarity_series(dataframe: pd.DataFrame) -> pd.Series:
+  if dataframe.empty:
+    return pd.Series(dtype=str)
+  for name in ["Rareté", "Rarete", "Finition"]:
+    matches = [c for c in dataframe.columns if str(c).strip().lower() == name.lower()]
+    if matches:
+      return dataframe[matches[0]].astype(str)
+  if len(dataframe.columns) > 5:
+    return dataframe.iloc[:, 5].astype(str)
+  return pd.Series(dtype=str)
+
+
 # ================== API TIERCES ==================
 
 def _normalize_card_text(text: str) -> str:
@@ -336,7 +348,7 @@ def fetch_onepiece_card_from_optcgapi(card_id: str):
     if "set_name" in best_match: details["set_name"] = str(best_match["set_name"])
     if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
     if "cost" in best_match: details["play_cost"] = str(best_match["cost"])
-    if "color" in best_match: details["color"] = str(best_match["color"]) # Récupération de la couleur officielle
+    if "color" in best_match: details["color"] = str(best_match["color"])
     return details
   except Exception:
     return {}
@@ -370,7 +382,7 @@ def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
     if "name" in best_match: details["card_name"] = str(best_match["name"])
     if "set" in best_match and "name" in best_match["set"]: details["set_name"] = str(best_match["set"]["name"])
     if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
-    if "types" in best_match: details["color"] = " / ".join(best_match["types"]) # Types Pokémon
+    if "types" in best_match: details["color"] = " / ".join(best_match["types"])
     return details
   except Exception:
     return {}
@@ -399,7 +411,7 @@ def fetch_lorcana_card_from_api(card_name: str):
     if best_match.get("Rarity"): details["rarity"] = str(best_match["Rarity"])
     if best_match.get("Cost"): details["play_cost"] = str(best_match["Cost"])
     if best_match.get("Card_Num"): details["card_number"] = str(best_match["Card_Num"])
-    if best_match.get("Color"): details["color"] = str(best_match["Color"]) # Couleur (Encre)
+    if best_match.get("Color"): details["color"] = str(best_match["Color"])
     return details
   except Exception:
     return {}
@@ -457,16 +469,8 @@ def analyze_card_gemini_cached(image_bytes):
     3. "set_name" : Nom ou code d'extension officiel imprimé.
     4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
     5. "rarity" : Rareté officielle exacte.
-       - Pour RIFTBOUND : Regarde TOUT EN BAS DE LA CARTE, AU MILIEU. Tu y verras un petit symbole géométrique :
-         * Boule blanche/grise = Common
-         * Triangle vert = Uncommon
-         * Losange rose = Rare
-         * Pentagone orange = Epic
-         * Hexagone jaune = Overnumbered / Alternate Art
-       - Pour ONE PIECE : C, UC, R, SR, SEC, P (attention : "DON!!" est la ressource, JAMAIS la rareté).
-       - Pour d'autres jeux : Commune, Peu Commune, Rare, Épique, Légendaire, Secret Rare, Promo.
     6. "play_cost" : Le coût en mana/ressource/énergie (ex: 5, 1, 10).
-    7. "color": La couleur ou le type dominant de la carte (ex: "Rouge", "Bleu", "Violet", "Améthyste", "Feu", "Ténèbres"). Si carte multicolore, sépare par un slash (ex: "Rouge/Vert").
+    7. "color": La couleur ou le type dominant de la carte (ex: "Rouge", "Bleu", "Violet", "Améthyste", "Feu", "Ténèbres").
     8. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
     9. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot (ex: "OnePiece", "Riftbound", "Pokemon", "Magic", "Lorcana", "Palworld").
     10. "cardmarket_search_term" : Termes exacts pour chercher la carte sur Cardmarket (Nom anglais + Référence).
@@ -549,7 +553,6 @@ with tab1:
           )
           date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-          # ÉCRITURE STRICTE DANS L'ORDRE DES 12 COLONNES DU GSHEET
           sheet.append_row([
               date_str,          # Col A: Date
               edit_game_name,    # Col B: Jeu
@@ -595,11 +598,16 @@ with tab2:
 
       st.markdown("<br>", unsafe_allow_html=True)
 
+      # BARRE DE FILTRES
       st.subheader("🔍 Filtrer et gérer le stock")
-      f1, f2, f3, f4, f5 = st.columns([1.5, 1.2, 1.2, 1.2, 1.2])
-
-      with f1:
+      
+      top_f1, top_f2 = st.columns([3, 1])
+      with top_f1:
         search_term = st.text_input("Recherche", placeholder="Nom, Couleur, Numéro...")
+      with top_f2:
+        view_mode = st.radio("Style d'affichage :", ["🎴 Grille (3 cols)", "📋 Tableau"], horizontal=True)
+
+      f2, f3, f4, f5 = st.columns(4)
 
       with f2:
         list_jeux = ["Tous les jeux"] + sorted([str(j) for j in df["Jeu"].unique() if j])
@@ -612,8 +620,9 @@ with tab2:
         selected_set = st.selectbox("Extension", list_sets)
 
       with f4:
-        # Filtre sur la Rareté
-        list_rarities = ["Toutes les raretés"] + sorted([str(r) for r in temp_df.get("Rareté", pd.Series()).unique() if r and str(r) != "nan"])
+        rarity_series = get_rarity_series(temp_df)
+        raw_rarities = [str(r).strip() for r in rarity_series.unique() if r and str(r).strip() not in ["nan", "None", ""]]
+        list_rarities = ["Toutes les raretés"] + sorted(list(set(raw_rarities)))
         selected_rarity = st.selectbox("Rareté", list_rarities)
 
       with f5:
@@ -629,7 +638,7 @@ with tab2:
         filtered_df = filtered_df[filtered_df["Extension"] == selected_set]
 
       if selected_rarity != "Toutes les raretés":
-        filtered_df = filtered_df[filtered_df["Rareté"] == selected_rarity]
+        filtered_df = filtered_df[get_rarity_series(filtered_df) == selected_rarity]
 
       if selected_loc != "Tous les emplacements":
         filtered_df = filtered_df[filtered_df["Emplacement"] == selected_loc]
@@ -643,61 +652,72 @@ with tab2:
 
       st.markdown(f"**Cartes trouvées : {len(filtered_df)}**")
 
-      for idx, row in filtered_df.iterrows():
-        with st.container():
-          c_info, c_details, c_qty, c_actions, c_link = st.columns([3.5, 2.5, 1.2, 2, 1])
+      # AFFICHAGE 1 : GRILLE COMPACTE EN 3 COLONNES
+      if view_mode == "🎴 Grille (3 cols)":
+        cols_per_row = 3
+        for i in range(0, len(filtered_df), cols_per_row):
+          cols = st.columns(cols_per_row)
+          for j in range(cols_per_row):
+            if i + j < len(filtered_df):
+              idx = filtered_df.index[i + j]
+              row = filtered_df.iloc[i + j]
 
-          # Correction de l'ancien décalage si nécessaire
-          raw_cost = row.get("Coût")
-          raw_lang = row.get("Langue")
-          raw_etat = row.get("État")
-          raw_rarity = row.get("Rareté") or row.get("Finition") or "N/A"
-          raw_color = row.get("Couleur") or "N/A"
+              raw_cost = row.get("Coût")
+              raw_lang = row.get("Langue")
+              raw_etat = row.get("État")
+              row_rarity_series = get_rarity_series(pd.DataFrame([row]))
+              raw_rarity = row_rarity_series.iloc[0] if not row_rarity_series.empty else "N/A"
+              raw_color = row.get("Couleur") or "N/A"
 
-          if (raw_cost is None or pd.isna(raw_cost) or str(raw_cost).strip() in ["", "N/A"]) and str(raw_lang).isdigit():
-            cost_val = str(raw_lang)
-            lang_val = str(raw_etat) if raw_etat and not pd.isna(raw_etat) else "JP"
-          else:
-            cost_val = str(raw_cost) if pd.notna(raw_cost) and str(raw_cost) != "" else "N/A"
-            lang_val = str(raw_lang) if pd.notna(raw_lang) and str(raw_lang) != "" else "FR"
-
-          with c_info:
-            st.markdown(f"**{row.get('Nom', '')}** `{row.get('Numéro', '')}`")
-            st.caption(f"{row.get('Jeu', '')} • {row.get('Extension', '')}")
-
-          with c_details:
-            st.markdown(f"📍 `{row.get('Emplacement', 'N/A')}` | Coût : `{cost_val}`")
-            color_text = f" • Couleur : {raw_color}" if raw_color != "N/A" else ""
-            st.caption(f"Rareté : {raw_rarity}{color_text} • Langue : {lang_val}")
-
-          with c_qty:
-            st.markdown(f"### {row['Quantité']} ex.")
-
-          with c_actions:
-            b1, b2, b3 = st.columns(3)
-            if b1.button("➕", key=f"add_{idx}"):
-              update_qty_cell(idx, row["Quantité"] + 1)
-              st.rerun()
-
-            if b2.button("➖", key=f"sub_{idx}"):
-              if row["Quantité"] > 1:
-                update_qty_cell(idx, row["Quantité"] - 1)
+              if (raw_cost is None or pd.isna(raw_cost) or str(raw_cost).strip() in ["", "N/A"]) and str(raw_lang).isdigit():
+                cost_val = str(raw_lang)
+                lang_val = str(raw_etat) if raw_etat and not pd.isna(raw_etat) else "JP"
               else:
-                delete_sheet_row(idx)
-              st.rerun()
+                cost_val = str(raw_cost) if pd.notna(raw_cost) and str(raw_cost) != "" else "N/A"
+                lang_val = str(raw_lang) if pd.notna(raw_lang) and str(raw_lang) != "" else "FR"
 
-            if b3.button("🗑️", key=f"del_{idx}"):
-              delete_sheet_row(idx)
-              st.rerun()
+              link_url = row.get("Lien Cardmarket") or row.get("Prix Est. (€)") or "#"
 
-          with c_link:
-            link_url = row.get("Lien Cardmarket") or row.get("Prix Est. (€)") or "#"
-            st.markdown(
-                f"<br><a href='{link_url}' target='_blank'>↗ Voir</a>",
-                unsafe_allow_html=True,
-            )
+              with cols[j]:
+                with st.container(border=True):
+                  st.markdown(f"**{row.get('Nom', '')}** `{row.get('Numéro', '')}`")
+                  st.caption(f"{row.get('Jeu', '')} • {row.get('Extension', '')}")
+                  st.markdown(f"📍 `{row.get('Emplacement', 'N/A')}` | Coût : `{cost_val}`")
+                  color_txt = f" • {raw_color}" if raw_color != "N/A" else ""
+                  st.caption(f"Rareté : {raw_rarity}{color_txt} • {lang_val}")
 
-          st.markdown("<hr style='margin: 8px 0; opacity: 0.15;'>", unsafe_allow_html=True)
+                  c_q, c_a1, c_a2, c_a3, c_l = st.columns([2, 1, 1, 1, 1])
+                  c_q.markdown(f"**{row['Quantité']} ex.**")
+
+                  if c_a1.button("➕", key=f"add_grid_{idx}"):
+                    update_qty_cell(idx, row["Quantité"] + 1)
+                    st.rerun()
+
+                  if c_a2.button("➖", key=f"sub_grid_{idx}"):
+                    if row["Quantité"] > 1:
+                      update_qty_cell(idx, row["Quantité"] - 1)
+                    else:
+                      delete_sheet_row(idx)
+                    st.rerun()
+
+                  if c_a3.button("🗑️", key=f"del_grid_{idx}"):
+                    delete_sheet_row(idx)
+                    st.rerun()
+
+                  c_l.markdown(f"<a href='{link_url}' target='_blank'>↗ Voir</a>", unsafe_allow_html=True)
+
+      # AFFICHAGE 2 : TABLEAU
+      else:
+        display_df = filtered_df.copy()
+        st.data_editor(
+            display_df,
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config={
+                "Lien Cardmarket": st.column_config.LinkColumn("Cardmarket", display_text="↗ Voir"),
+                "Quantité": st.column_config.NumberColumn("Quantité", min_value=1, step=1),
+            },
+        )
 
     else:
       st.info("L'inventaire est actuellement vide.")
