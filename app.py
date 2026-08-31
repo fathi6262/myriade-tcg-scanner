@@ -560,7 +560,6 @@ with tab2:
       with top_f2:
         view_mode = st.radio("Style d'affichage :", ["🎴 Grille de Cartes", "📋 Tableau condensé"], horizontal=True)
 
-      # Ajout du filtre couleur : nous avons maintenant 5 colonnes de filtres
       f2, f3, f4, f5, f6 = st.columns(5)
 
       with f2:
@@ -580,7 +579,6 @@ with tab2:
         selected_rarity = st.selectbox("Rareté", list_rarities)
 
       with f5:
-        # Filtre Couleur
         raw_colors = [str(c).strip() for c in temp_df.get("Couleur", pd.Series()).unique() if c and str(c).strip() not in ["nan", "None", "N/A", ""]]
         list_colors = ["Toutes les couleurs"] + sorted(list(set(raw_colors)))
         selected_color = st.selectbox("Couleur", list_colors)
@@ -612,7 +610,7 @@ with tab2:
       st.markdown(f"**Cartes trouvées : {len(filtered_df)}**")
 
       # ========================================================
-      # AFFICHAGE 1 : GRILLE DE CARTES (FORMATTAGE HTML NET SANS MARKDOWN INDENTÉ)
+      # AFFICHAGE 1 : GRILLE DE CARTES
       # ========================================================
       if view_mode == "🎴 Grille de Cartes":
         cols_per_row = 3
@@ -683,10 +681,18 @@ with tab2:
                   else: btn_c4.button("↗️", key=f"no_link_{idx}", disabled=True, use_container_width=True)
 
       # ========================================================
-      # AFFICHAGE 2 : TABLEAU
+      # AFFICHAGE 2 : TABLEAU DENSE AVEC CONVERTISSEUR DE LIEN DYNAMIQUE
       # ========================================================
       else:
         display_df = filtered_df.copy()
+
+        # Normalisation automatique des noms de colonnes pour le composant d'édition Streamlit
+        if "Prix Est. (€)" in display_df.columns and "Lien Cardmarket" not in display_df.columns:
+          display_df = display_df.rename(columns={"Prix Est. (€)": "Lien Cardmarket"})
+
+        if "État" in display_df.columns and "Langue" not in display_df.columns:
+          display_df = display_df.rename(columns={"Langue": "Coût", "État": "Langue"})
+
         st.data_editor(
             display_df,
             use_container_width=True,
