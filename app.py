@@ -149,7 +149,7 @@ st.markdown(
 # 2. CONFIGURATION ET CACHE DES API
 # ---------------------------------------------------------
 SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
-QTY_COL_LETTER = "J"  # Colonne Quantité (10e colonne)
+QTY_COL_LETTER = "J"
 
 
 @st.cache_resource
@@ -536,7 +536,7 @@ with tab1:
           )
           date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-          # ÉCRITURE DANS L'ORDRE EXACT DES COLONNES DE TON GSHEET
+          # ÉCRITURE STRICTE DANS L'ORDRE DES COLONNES DU GSHEET
           sheet.append_row([
               date_str,          # Col A: Date
               edit_game_name,    # Col B: Jeu
@@ -565,7 +565,6 @@ with tab2:
       df = pd.DataFrame(records)
       df["Quantité"] = pd.to_numeric(df.get("Quantité", 1), errors="coerce").fillna(1).astype(int)
 
-      # --- METRIQUES KPI ---
       col_m1, col_m2, col_m3 = st.columns(3)
       with col_m1:
         st.markdown(render_kpi("Références uniques", str(len(df)), "🎴"), unsafe_allow_html=True)
@@ -582,7 +581,6 @@ with tab2:
 
       st.markdown("<br>", unsafe_allow_html=True)
 
-      # --- BARRE DE FILTRES MULTI-CRITÈRES ---
       st.subheader("🔍 Filtrer et gérer le stock")
       f1, f2, f3, f4 = st.columns([2, 1.5, 1.5, 1.5])
 
@@ -593,7 +591,6 @@ with tab2:
         list_jeux = ["Tous les jeux"] + sorted([str(j) for j in df["Jeu"].unique() if j])
         selected_game = st.selectbox("Jeu", list_jeux)
 
-      # Filtres dynamiques en fonction du jeu sélectionné
       temp_df = df if selected_game == "Tous les jeux" else df[df["Jeu"] == selected_game]
 
       with f3:
@@ -604,7 +601,6 @@ with tab2:
         list_locs = ["Tous les emplacements"] + sorted([str(l) for l in temp_df.get("Emplacement", pd.Series()).unique() if l])
         selected_loc = st.selectbox("Emplacement", list_locs)
 
-      # Application des filtres
       filtered_df = df.copy()
 
       if selected_game != "Tous les jeux":
@@ -624,15 +620,23 @@ with tab2:
 
       st.markdown(f"**Cartes trouvées : {len(filtered_df)}**")
 
-      # --- LISTE DES CARTES AVEC LECTURE PROPRE DES COLONNES ---
       for idx, row in filtered_df.iterrows():
         with st.container():
           c_info, c_details, c_qty, c_actions, c_link = st.columns([3.5, 2.5, 1.2, 2, 1])
 
-          # Fallback de compatibilité au cas où les anciennes colonnes existaient
-          rarity_val = row.get("Rareté") or row.get("Finition") or "N/A"
-          cost_val = row.get("Coût") if pd.notna(row.get("Coût")) else "N/A"
-          lang_val = row.get("Langue") or row.get("État") or "FR"
+          # --- DÉTECTION ET CORRECTION INTELLIGENTE DU DÉCALAGE DE COLONNE ---
+          raw_cost = row.get("Coût")
+          raw_lang = row.get("Langue")
+          raw_etat = row.get("État")
+          raw_rarity = row.get("Rareté") or row.get("Finition") or "N/A"
+
+          # Si 'Langue' contient un chiffre (ex: '5') et que 'Coût' est vide, c'est l'ancien décalage
+          if (raw_cost is None or pd.isna(raw_cost) or str(raw_cost).strip() in ["", "N/A"]) and str(raw_lang).isdigit():
+            cost_val = str(raw_lang)
+            lang_val = str(raw_etat) if raw_etat and not pd.isna(raw_etat) else "JP"
+          else:
+            cost_val = str(raw_cost) if pd.notna(raw_cost) and str(raw_cost) != "" else "N/A"
+            lang_val = str(raw_lang) if pd.notna(raw_lang) and str(raw_lang) != "" else "FR"
 
           with c_info:
             st.markdown(f"**{row.get('Nom', '')}** `{row.get('Numéro', '')}`")
@@ -640,7 +644,7 @@ with tab2:
 
           with c_details:
             st.markdown(f"📍 `{row.get('Emplacement', 'N/A')}` | Coût : `{cost_val}`")
-            st.caption(f"Rareté : {rarity_val} • Langue : {lang_val}")
+            st.caption(f"Rareté : {raw_rarity} • Langue : {lang_val}")
 
           with c_qty:
             st.markdown(f"### {row['Quantité']} ex.")
