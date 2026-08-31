@@ -206,12 +206,13 @@ def build_cardmarket_url(slug: str, search_term: str) -> str:
 
 
 def sheet_row_index(pandas_idx: int) -> int:
-  return pandas_idx + 2
+  return int(pandas_idx) + 2
 
 
-def update_qty_cell(pandas_idx: int, new_qty: int):
+def update_qty_cell(pandas_idx: int, new_qty):
   row = sheet_row_index(pandas_idx)
-  sheet.update_acell(f"{QTY_COL_LETTER}{row}", new_qty)
+  # Conversion explicite en int Python natif pour éviter l'erreur de sérialisation JSON int64
+  sheet.update_acell(f"{QTY_COL_LETTER}{row}", int(new_qty))
   load_stock_records.clear()
 
 
@@ -428,7 +429,6 @@ def enrich_card_data(card: dict) -> dict:
 def analyze_card_gemini_cached(image_bytes):
   pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-  # NOUVEAU PROMPT : Conçu pour forcer un tableau JSON, qu'il y ait 1 ou N cartes étalées
   prompt = """
     Tu es un expert mondial en identification de cartes TCG (Trading Card Games).
     L'image fournie peut contenir UNE ou PLUSIEURS cartes étalées (Scan Bulk).
@@ -448,11 +448,6 @@ def analyze_card_gemini_cached(image_bytes):
 
     Génère STRICTEMENT un TABLEAU (array) JSON valide contenant un objet par carte trouvée, sans aucun formatage markdown additionnel. 
     Même s'il n'y a qu'une seule carte, renvoie un tableau contenant un seul objet.
-    Exemple de retour attendu :
-    [
-      { "game_name": "...", "card_name": "..." },
-      { "game_name": "...", "card_name": "..." }
-    ]
     """
 
   response = gemini_model.generate_content(
@@ -465,7 +460,6 @@ def analyze_card_gemini_cached(image_bytes):
   raw_text = response.text.strip()
   try:
       parsed = json.loads(raw_text)
-      # Force le retour en liste si l'IA s'est trompée et a renvoyé un dict unique
       if isinstance(parsed, dict):
           return [parsed]
       return parsed
@@ -480,7 +474,7 @@ tab1, tab2, tab3 = st.tabs(["📸 Scanner", "📦 Stock", "📊 Dashboard"])
 
 # --- ONGLET 1 : SCANNER (ULTRA-BULK) ---
 with tab1:
-  st.info("💡 **Nouveauté Scan Ultra-Bulk :** Prends en photo une ou plusieurs cartes en même temps sur la table ! L'IA détectera automatiquement toutes les cartes présentes.", icon="✨")
+  st.info("💡 **Scan Ultra-Bulk :** Tu peux étaler plusieurs cartes sur une seule photo.", icon="✨")
   
   source_type = st.radio(
       "Source de l'image :",
@@ -492,7 +486,7 @@ with tab1:
   images_to_process = []
 
   if source_type == "💻 PC (Fichiers)":
-    uploaded_files = st.file_uploader("Dépose une ou plusieurs photos (tu peux étaler tes cartes)", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Dépose une ou plusieurs photos", type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True)
     if uploaded_files:
         images_to_process.extend(uploaded_files)
   else:
@@ -511,10 +505,8 @@ with tab1:
                   img_bytes = img_byte_arr.getvalue()
                   
                   try:
-                      # Analyse IA (Retourne toujours une liste)
                       cards_json = analyze_card_gemini_cached(img_bytes)
                       
-                      # Enrichissement de chaque carte trouvée via API
                       for c in cards_json:
                           enriched = enrich_card_data(c)
                           all_detected_cards.append({
@@ -536,7 +528,6 @@ with tab1:
 
           st.session_state["pending_cards"] = all_detected_cards
 
-  # Interface de validation (Data Editor)
   if "pending_cards" in st.session_state and st.session_state["pending_cards"]:
       st.markdown("---")
       st.subheader(f"✅ {len(st.session_state['pending_cards'])} carte(s) détectée(s) ! Vérifie et valide :")
@@ -547,7 +538,7 @@ with tab1:
           use_container_width=True,
           column_config={
               "Quantité": st.column_config.NumberColumn("Quantité", min_value=1, step=1),
-              "Cardmarket Slug": None, # Cache les infos techniques inutiles à l'écran
+              "Cardmarket Slug": None,
               "Terme Recherche": None
           }
       )
@@ -569,8 +560,8 @@ with tab1:
                   row["Rareté"],
                   row["Coût"],
                   row["Langue"],
-                  batch_loc, # On utilise l'emplacement commun
-                  row["Quantité"],
+                  batch_loc,
+                  int(row["Quantité"]),
                   row["Couleur"],
                   cardmarket_url
               ])
@@ -671,7 +662,7 @@ with tab2:
               row_rarity_series = get_rarity_series(pd.DataFrame([row]))
               raw_rarity = row_rarity_series.iloc[0] if not row_rarity_series.empty else "N/A"
               raw_color = row.get("Couleur") or "N/A"
-              qty = row["Quantité"]
+              qty = int(row["Quantité"])
 
               if (raw_cost is None or pd.isna(raw_cost) or str(raw_cost).strip() in ["", "N/A"]) and str(raw_lang).isdigit():
                 cost_val = str(raw_lang)
@@ -685,7 +676,6 @@ with tab2:
               tag_color = f'<span style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem;">{raw_color}</span>' if raw_color and str(raw_color) != "N/A" else ""
               tag_rarity = f'<span style="background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;">{raw_rarity}</span>' if raw_rarity and str(raw_rarity) != "N/A" else ""
 
-              # NOUVEAUTÉ : Avertissement Playset si > 4
               playset_html = ""
               if qty > 4:
                   playset_html = f"<div class='playset-warning'>⚠️ Playset dépassé ({qty}/4) — Revente conseillée</div>"
@@ -768,7 +758,6 @@ with tab3:
             
             st.subheader("📊 Répartition de la collection")
             
-            # Graphiques de répartition simples, natifs et propres
             col_chart1, col_chart2 = st.columns(2)
             
             with col_chart1:
