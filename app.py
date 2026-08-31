@@ -336,6 +336,7 @@ def fetch_onepiece_card_from_optcgapi(card_id: str):
     if "set_name" in best_match: details["set_name"] = str(best_match["set_name"])
     if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
     if "cost" in best_match: details["play_cost"] = str(best_match["cost"])
+    if "color" in best_match: details["color"] = str(best_match["color"]) # Récupération de la couleur officielle
     return details
   except Exception:
     return {}
@@ -369,6 +370,7 @@ def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
     if "name" in best_match: details["card_name"] = str(best_match["name"])
     if "set" in best_match and "name" in best_match["set"]: details["set_name"] = str(best_match["set"]["name"])
     if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
+    if "types" in best_match: details["color"] = " / ".join(best_match["types"]) # Types Pokémon
     return details
   except Exception:
     return {}
@@ -397,6 +399,7 @@ def fetch_lorcana_card_from_api(card_name: str):
     if best_match.get("Rarity"): details["rarity"] = str(best_match["Rarity"])
     if best_match.get("Cost"): details["play_cost"] = str(best_match["Cost"])
     if best_match.get("Card_Num"): details["card_number"] = str(best_match["Card_Num"])
+    if best_match.get("Color"): details["color"] = str(best_match["Color"]) # Couleur (Encre)
     return details
   except Exception:
     return {}
@@ -454,10 +457,19 @@ def analyze_card_gemini_cached(image_bytes):
     3. "set_name" : Nom ou code d'extension officiel imprimé.
     4. "card_number" : Numéro complet tel qu'imprimé (ex: "ST21-014", "156/166", "227/227"). Ne trompe JAMAIS les chiffres "0" avec des lettres "O".
     5. "rarity" : Rareté officielle exacte.
+       - Pour RIFTBOUND : Regarde TOUT EN BAS DE LA CARTE, AU MILIEU. Tu y verras un petit symbole géométrique :
+         * Boule blanche/grise = Common
+         * Triangle vert = Uncommon
+         * Losange rose = Rare
+         * Pentagone orange = Epic
+         * Hexagone jaune = Overnumbered / Alternate Art
+       - Pour ONE PIECE : C, UC, R, SR, SEC, P (attention : "DON!!" est la ressource, JAMAIS la rareté).
+       - Pour d'autres jeux : Commune, Peu Commune, Rare, Épique, Légendaire, Secret Rare, Promo.
     6. "play_cost" : Le coût en mana/ressource/énergie (ex: 5, 1, 10).
-    7. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
-    8. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot (ex: "OnePiece", "Riftbound", "Pokemon", "Magic", "Lorcana", "Palworld").
-    9. "cardmarket_search_term" : Termes exacts pour chercher la carte sur Cardmarket (Nom anglais + Référence).
+    7. "color": La couleur ou le type dominant de la carte (ex: "Rouge", "Bleu", "Violet", "Améthyste", "Feu", "Ténèbres"). Si carte multicolore, sépare par un slash (ex: "Rouge/Vert").
+    8. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
+    9. "cardmarket_slug" : Nom de la catégorie sur Cardmarket en 1 mot (ex: "OnePiece", "Riftbound", "Pokemon", "Magic", "Lorcana", "Palworld").
+    10. "cardmarket_search_term" : Termes exacts pour chercher la carte sur Cardmarket (Nom anglais + Référence).
 
     Génère STRICTEMENT un objet JSON valide, sans formatage markdown additionnel.
     """
@@ -515,10 +527,11 @@ with tab1:
           edit_game_name = st.text_input("Jeu", value=card.get("game_name", ""))
           edit_card_name = st.text_input("Nom de la carte", value=card.get("card_name", ""))
           edit_set_name = st.text_input("Extension", value=card.get("set_name", ""))
+          edit_card_number = st.text_input("Numéro de carte", value=card.get("card_number", ""))
 
         with col2:
-          edit_card_number = st.text_input("Numéro de carte", value=card.get("card_number", ""))
           edit_rarity = st.text_input("Rareté", value=card.get("rarity", ""))
+          edit_couleur = st.text_input("Couleur / Type", value=card.get("color", ""))
           edit_play_cost = st.text_input("Coût (Mana/Ressource)", value=str(card.get("play_cost", "")))
 
         with col3:
@@ -536,7 +549,7 @@ with tab1:
           )
           date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-          # ÉCRITURE STRICTE DANS L'ORDRE DES COLONNES DU GSHEET
+          # ÉCRITURE STRICTE DANS L'ORDRE DES 12 COLONNES DU GSHEET
           sheet.append_row([
               date_str,          # Col A: Date
               edit_game_name,    # Col B: Jeu
@@ -548,7 +561,8 @@ with tab1:
               edit_language,     # Col H: Langue
               edit_emplacement,  # Col I: Emplacement
               edit_quantite,     # Col J: Quantité
-              cardmarket_url,    # Col K: Lien Cardmarket
+              edit_couleur,      # Col K: Couleur
+              cardmarket_url,    # Col L: Lien Cardmarket
           ])
           load_stock_records.clear()
           st.success(f"✅ {edit_card_name} enregistré dans le stock !")
@@ -582,10 +596,10 @@ with tab2:
       st.markdown("<br>", unsafe_allow_html=True)
 
       st.subheader("🔍 Filtrer et gérer le stock")
-      f1, f2, f3, f4 = st.columns([2, 1.5, 1.5, 1.5])
+      f1, f2, f3, f4, f5 = st.columns([1.5, 1.2, 1.2, 1.2, 1.2])
 
       with f1:
-        search_term = st.text_input("Recherche textuelle", placeholder="Nom de carte, numéro...")
+        search_term = st.text_input("Recherche", placeholder="Nom, Couleur, Numéro...")
 
       with f2:
         list_jeux = ["Tous les jeux"] + sorted([str(j) for j in df["Jeu"].unique() if j])
@@ -598,6 +612,11 @@ with tab2:
         selected_set = st.selectbox("Extension", list_sets)
 
       with f4:
+        # Filtre sur la Rareté
+        list_rarities = ["Toutes les raretés"] + sorted([str(r) for r in temp_df.get("Rareté", pd.Series()).unique() if r and str(r) != "nan"])
+        selected_rarity = st.selectbox("Rareté", list_rarities)
+
+      with f5:
         list_locs = ["Tous les emplacements"] + sorted([str(l) for l in temp_df.get("Emplacement", pd.Series()).unique() if l])
         selected_loc = st.selectbox("Emplacement", list_locs)
 
@@ -609,6 +628,9 @@ with tab2:
       if selected_set != "Toutes les extensions":
         filtered_df = filtered_df[filtered_df["Extension"] == selected_set]
 
+      if selected_rarity != "Toutes les raretés":
+        filtered_df = filtered_df[filtered_df["Rareté"] == selected_rarity]
+
       if selected_loc != "Tous les emplacements":
         filtered_df = filtered_df[filtered_df["Emplacement"] == selected_loc]
 
@@ -616,6 +638,7 @@ with tab2:
         filtered_df = filtered_df[
             filtered_df["Nom"].astype(str).str.contains(search_term, case=False, na=False)
             | filtered_df["Numéro"].astype(str).str.contains(search_term, case=False, na=False)
+            | filtered_df.get("Couleur", pd.Series(dtype=str)).astype(str).str.contains(search_term, case=False, na=False)
         ]
 
       st.markdown(f"**Cartes trouvées : {len(filtered_df)}**")
@@ -624,13 +647,13 @@ with tab2:
         with st.container():
           c_info, c_details, c_qty, c_actions, c_link = st.columns([3.5, 2.5, 1.2, 2, 1])
 
-          # --- DÉTECTION ET CORRECTION INTELLIGENTE DU DÉCALAGE DE COLONNE ---
+          # Correction de l'ancien décalage si nécessaire
           raw_cost = row.get("Coût")
           raw_lang = row.get("Langue")
           raw_etat = row.get("État")
           raw_rarity = row.get("Rareté") or row.get("Finition") or "N/A"
+          raw_color = row.get("Couleur") or "N/A"
 
-          # Si 'Langue' contient un chiffre (ex: '5') et que 'Coût' est vide, c'est l'ancien décalage
           if (raw_cost is None or pd.isna(raw_cost) or str(raw_cost).strip() in ["", "N/A"]) and str(raw_lang).isdigit():
             cost_val = str(raw_lang)
             lang_val = str(raw_etat) if raw_etat and not pd.isna(raw_etat) else "JP"
@@ -644,7 +667,8 @@ with tab2:
 
           with c_details:
             st.markdown(f"📍 `{row.get('Emplacement', 'N/A')}` | Coût : `{cost_val}`")
-            st.caption(f"Rareté : {raw_rarity} • Langue : {lang_val}")
+            color_text = f" • Couleur : {raw_color}" if raw_color != "N/A" else ""
+            st.caption(f"Rareté : {raw_rarity}{color_text} • Langue : {lang_val}")
 
           with c_qty:
             st.markdown(f"### {row['Quantité']} ex.")
