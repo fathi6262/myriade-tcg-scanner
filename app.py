@@ -147,7 +147,9 @@ st.markdown(
 # 2. CONFIGURATION ET CACHE DES API
 # ---------------------------------------------------------
 SPREADSHEET_ID = "1rd14kfknX9z1P-72V_G2ITVBv2K1aMnLy5H_qt8c6eo"
-QTY_COL_LETTER = "J"
+QTY_COL_LETTER = "J"  # Colonne "Quantité". La colonne "Image URL" est ajoutée
+                      # en toute fin de ligne (après "Lien Cardmarket") pour ne
+                      # jamais décaler cette référence.
 
 
 @st.cache_resource
@@ -209,58 +211,140 @@ def delete_sheet_row(pandas_idx: int):
   load_stock_records.clear()
 
 
-def get_rarity_series(dataframe: pd.DataFrame) -> pd.Series:
-  if dataframe.empty:
-    return pd.Series(dtype=str)
-  for name in ["Rareté", "Rarete", "Finition"]:
-    matches = [c for c in dataframe.columns if str(c).strip().lower() == name.lower()]
-    if matches:
-      return dataframe[matches[0]].astype(str)
-  if len(dataframe.columns) > 5:
-    return dataframe.iloc[:, 5].astype(str)
-  return pd.Series(dtype=str)
-
-
-# ================== API TIERCES ==================
-
 def _normalize_card_text(text: str) -> str:
   text = text.strip().lower()
   text = re.sub(r"[,\-–—'’\.]", " ", text)
   text = re.sub(r"\s+", " ", text)
   return text.strip()
 
+
 def _extract_collector_number(number: str):
   match = re.search(r"\d+", number or "")
   return int(match.group(0)) if match else None
+
+
+# ---- (2) Normalisation centralisée des colonnes (remplace les heuristiques
+#      dispersées et le fallback positionnel iloc[:, 5] du script précédent) ----
+
+def get_field_series(dataframe: pd.DataFrame, aliases: list) -> pd.Series:
+  """Renvoie la première colonne du DataFrame dont le nom (normalisé) matche
+  un des alias donnés. Pas de fallback positionnel : si rien ne matche, une
+  série vide est renvoyée explicitement plutôt que de deviner une colonne."""
+  if dataframe.empty:
+    return pd.Series(dtype=str)
+  for name in aliases:
+    matches = [c for c in dataframe.columns if str(c).strip().lower() == name.lower()]
+    if matches:
+      return dataframe[matches[0]].astype(str)
+  return pd.Series(dtype=str)
+
+
+def get_rarity_series(dataframe: pd.DataFrame) -> pd.Series:
+  return get_field_series(dataframe, ["Rareté", "Rarete", "Finition"])
+
+
+def resolve_cost_and_language(row: pd.Series) -> pd.Series:
+  """Gère le décalage historique de colonnes sur les anciennes lignes de la
+  feuille (le coût s'est parfois retrouvé dans "Langue" et la langue dans
+  "État"). Centralisé ici pour n'être calculé qu'une fois par ligne, au lieu
+  d'être recalculé à chaque affichage."""
+  raw_cost = row.get("Coût")
+  raw_lang = row.get("Langue")
+  raw_etat = row.get("État")
+
+  if (
+      (raw_cost is None or pd.isna(raw_cost) or str(raw_cost).strip() in ["", "N/A"])
+      and raw_lang is not None
+      and str(raw_lang).isdigit()
+  ):
+    cost_val = str(raw_lang)
+    lang_val = str(raw_etat) if raw_etat and not pd.isna(raw_etat) else "JP"
+  else:
+    cost_val = str(raw_cost) if pd.notna(raw_cost) and str(raw_cost) != "" else "N/A"
+    lang_val = str(raw_lang) if pd.notna(raw_lang) and str(raw_lang) != "" else "FR"
+
+  return pd.Series({"Coût_final": cost_val, "Langue_final": lang_val})
+
+
+def _match_key(jeu, nom, numero) -> tuple:
+  """Clé de matching normalisée pour détecter les doublons d'inventaire."""
+  return (
+      _normalize_card_text(str(jeu or "")),
+      _normalize_card_text(str(nom or "")),
+      _normalize_card_text(str(numero or "")),
+  )
+
+
+def build_existing_stock_index() -> dict:
+  """Index {clé -> (index pandas, quantité actuelle)} du stock déjà en base,
+  utilisé pour incrémenter une carte existante au lieu d'en recréer une ligne
+  en double."""
+  records = load_stock_records()
+  index = {}
+  if not records:
+    return index
+  df = pd.DataFrame(records)
+  if not {"Jeu", "Nom", "Numéro"}.issubset(df.columns):
+    return index
+  qty_series = pd.to_numeric(df.get("Quantité", 1), errors="coerce").fillna(1).astype(int)
+  for idx, row in df.iterrows():
+    key = _match_key(row.get("Jeu"), row.get("Nom"), row.get("Numéro"))
+    index[key] = (idx, int(qty_series.loc[idx]))
+  return index
+
+
+# ================== API TIERCES ==================
 
 def _champion_name_only(card_name: str) -> str:
   parts = re.split(r"\s*[,:\-–—]\s*", card_name.strip(), maxsplit=1)
   return parts[0].strip() if parts else card_name.strip()
 
+
 @st.cache_data(show_spinner=False)
-def _query_riftcodex_by_name(name: str):
+def _query_riftcodex_by_name(name: str, set_id: str = ""):
+  """Appel HTTP à /cards/name. set_id (ex: 'VEN') filtre nativement côté API
+  quand on le connaît — c'est le moyen le plus fiable de lever une ambiguïté
+  entre deux cartes homonymes de sets différents (ex: rééditions promo)."""
   if not name:
     return []
   try:
-    response = requests.get("https://api.riftcodex.com/cards/name", params={"fuzzy": name, "size": 20}, timeout=8)
+    params = {"fuzzy": name, "size": 20}
+    if set_id:
+      params["set_id"] = set_id
+    response = requests.get("https://api.riftcodex.com/cards/name", params=params, timeout=8)
     response.raise_for_status()
     return response.json().get("items", [])
   except Exception:
     return []
 
-def search_riftcodex_raw(card_name: str):
+
+def search_riftcodex_raw(card_name: str, set_id: str = ""):
   if not card_name:
     return []
-  results = _query_riftcodex_by_name(card_name.strip())
-  if results: return results
+  results = _query_riftcodex_by_name(card_name.strip(), set_id)
+  if results:
+    return results
   champion_only = _champion_name_only(card_name)
   if champion_only and champion_only.lower() != card_name.strip().lower():
-    results = _query_riftcodex_by_name(champion_only)
+    results = _query_riftcodex_by_name(champion_only, set_id)
   return results
 
-def fetch_riftbound_card_from_riftcodex(card_name: str, card_number: str = ""):
-  results = search_riftcodex_raw(card_name)
-  if not results: return {}
+
+def fetch_riftbound_card_from_riftcodex(card_name: str, card_number: str = "", set_code: str = ""):
+  """Sélectionne la carte Riftbound correspondante dans les résultats Riftcodex.
+
+  Priorité de matching :
+    1. set_id (code de set imprimé, ex: VEN) + numéro de collection : sans
+       ambiguïté possible.
+    2. numéro de collection seul, désambiguïsé par set_code si plusieurs sets
+       partagent ce numéro, sinon par nom.
+    3. nom exact / préfixe tolérant, uniquement si un seul candidat.
+  Sans match fiable, on ne renvoie rien plutôt que de deviner.
+  """
+  set_code = (set_code or "").strip()
+  results = search_riftcodex_raw(card_name, set_id=set_code)
+  if not results:
+    return {}
 
   best_match = None
   target_number = _extract_collector_number(card_number)
@@ -270,116 +354,199 @@ def fetch_riftbound_card_from_riftcodex(card_name: str, card_number: str = ""):
     if len(number_matches) == 1:
       best_match = number_matches[0]
     elif len(number_matches) > 1:
-      target_name = _normalize_card_text(card_name)
-      best_match = next((c for c in number_matches if _normalize_card_text(c.get("name", "")) == target_name), None)
+      if set_code:
+        set_filtered = [
+            c for c in number_matches
+            if str((c.get("set") or {}).get("set_id", "")).lower() == set_code.lower()
+        ]
+        if len(set_filtered) == 1:
+          best_match = set_filtered[0]
+      if best_match is None:
+        target_name = _normalize_card_text(card_name)
+        best_match = next(
+            (c for c in number_matches if _normalize_card_text(c.get("name", "")) == target_name),
+            None,
+        )
 
   if best_match is None:
     target_name = _normalize_card_text(card_name)
     exact_matches = [c for c in results if _normalize_card_text(c.get("name", "")) == target_name]
-    if len(exact_matches) == 1: best_match = exact_matches[0]
+    if len(exact_matches) == 1:
+      best_match = exact_matches[0]
 
   if best_match is None:
     target_name = _normalize_card_text(card_name)
-    prefix_matches = [c for c in results if _normalize_card_text(c.get("name", "")) and target_name.startswith(_normalize_card_text(c.get("name", "")))]
-    if len(prefix_matches) == 1: best_match = prefix_matches[0]
+    prefix_matches = [
+        c for c in results
+        if _normalize_card_text(c.get("name", ""))
+        and target_name.startswith(_normalize_card_text(c.get("name", "")))
+    ]
+    if len(prefix_matches) == 1:
+      best_match = prefix_matches[0]
 
-  if best_match is None: return {}
+  if best_match is None:
+    return {}
 
   classification = best_match.get("classification", {}) or {}
   attributes = best_match.get("attributes", {}) or {}
   set_info = best_match.get("set", {}) or {}
+  media = best_match.get("media", {}) or {}
 
   details = {}
-  if best_match.get("name"): details["card_name"] = str(best_match["name"])
-  if set_info.get("label"): details["set_name"] = str(set_info["label"])
-  if classification.get("rarity"): details["rarity"] = str(classification["rarity"]).capitalize()
-  if attributes.get("energy") is not None: details["play_cost"] = str(attributes["energy"])
-  if best_match.get("collector_number") is not None: details["card_number"] = str(best_match["collector_number"])
+  if best_match.get("name"):
+    details["card_name"] = str(best_match["name"])
+  if set_info.get("label"):
+    details["set_name"] = str(set_info["label"])
+  if classification.get("rarity"):
+    details["rarity"] = str(classification["rarity"]).capitalize()
+  if attributes.get("energy") is not None:
+    details["play_cost"] = str(attributes["energy"])
+  if best_match.get("collector_number") is not None:
+    details["card_number"] = str(best_match["collector_number"])
+  if media.get("image_url"):
+    details["image_url"] = str(media["image_url"])
   return details
 
 
 @st.cache_data(show_spinner=False)
 def fetch_onepiece_card_from_optcgapi(card_id: str):
-  if not card_id: return {}
+  """Recherche par ID exact (endpoint dédié) : intrinsèquement sans ambiguïté
+  de carte, contrairement à une recherche par nom."""
+  if not card_id:
+    return {}
   card_id = card_id.upper().strip().split()[0]
-  if card_id.startswith("ST"): url = f"https://optcgapi.com/api/decks/card/{card_id}/"
-  elif card_id.startswith("P"): url = f"https://optcgapi.com/api/promos/card/{card_id}/"
-  else: url = f"https://optcgapi.com/api/sets/card/{card_id}/"
+  if card_id.startswith("ST"):
+    url = f"https://optcgapi.com/api/decks/card/{card_id}/"
+  elif card_id.startswith("P"):
+    url = f"https://optcgapi.com/api/promos/card/{card_id}/"
+  else:
+    url = f"https://optcgapi.com/api/sets/card/{card_id}/"
 
   try:
     response = requests.get(url, timeout=8)
     response.raise_for_status()
     data = response.json()
     best_match = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else {})
-    if not best_match: return {}
+    if not best_match:
+      return {}
 
     details = {}
-    if "name" in best_match: details["card_name"] = str(best_match["name"])
-    if "set_name" in best_match: details["set_name"] = str(best_match["set_name"])
-    if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
-    if "cost" in best_match: details["play_cost"] = str(best_match["cost"])
-    if "color" in best_match: details["color"] = str(best_match["color"])
+    if "name" in best_match:
+      details["card_name"] = str(best_match["name"])
+    if "set_name" in best_match:
+      details["set_name"] = str(best_match["set_name"])
+    if "rarity" in best_match:
+      details["rarity"] = str(best_match["rarity"])
+    if "cost" in best_match:
+      details["play_cost"] = str(best_match["cost"])
+    if "color" in best_match:
+      details["color"] = str(best_match["color"])
     return details
-  except Exception: return {}
+  except Exception:
+    return {}
 
 
 @st.cache_data(show_spinner=False)
 def fetch_pokemon_card_from_pokemontcgio(card_name: str, card_number: str):
-  if not card_name: return {}
+  """Matching par numéro obligatoire dès qu'il est fourni : si aucun résultat
+  ne correspond au numéro détecté, on ne renvoie rien plutôt que la première
+  carte homonyme trouvée (qui peut être un tout autre set/rareté)."""
+  if not card_name:
+    return {}
   try:
     clean_name = card_name.split()[0].replace("é", "e").strip()
-    response = requests.get("https://api.pokemontcg.io/v2/cards", params={"q": f'name:"{clean_name}"'}, timeout=8)
+    response = requests.get(
+        "https://api.pokemontcg.io/v2/cards", params={"q": f'name:"{clean_name}"'}, timeout=8
+    )
     response.raise_for_status()
     results = response.json().get("data", [])
-    if not results: return {}
+    if not results:
+      return {}
 
-    best_match = results[0]
+    best_match = None
     if card_number:
       num_only = card_number.split("/")[0].strip()
       for r in results:
         if str(r.get("number")).lower() == num_only.lower():
           best_match = r
           break
+      if best_match is None:
+        return {}
+    else:
+      best_match = results[0]
 
     details = {}
-    if "name" in best_match: details["card_name"] = str(best_match["name"])
-    if "set" in best_match and "name" in best_match["set"]: details["set_name"] = str(best_match["set"]["name"])
-    if "rarity" in best_match: details["rarity"] = str(best_match["rarity"])
-    if "types" in best_match: details["color"] = " / ".join(best_match["types"])
+    if "name" in best_match:
+      details["card_name"] = str(best_match["name"])
+    if "set" in best_match and "name" in best_match["set"]:
+      details["set_name"] = str(best_match["set"]["name"])
+    if "rarity" in best_match:
+      details["rarity"] = str(best_match["rarity"])
+    if "types" in best_match:
+      details["color"] = " / ".join(best_match["types"])
     return details
-  except Exception: return {}
+  except Exception:
+    return {}
 
 
 @st.cache_data(show_spinner=False)
-def fetch_lorcana_card_from_api(card_name: str):
-  if not card_name: return {}
+def fetch_lorcana_card_from_api(card_name: str, card_number: str = ""):
+  """Comme pour Pokémon : matching par numéro obligatoire quand disponible,
+  pas de fallback aveugle sur le premier résultat."""
+  if not card_name:
+    return {}
   try:
     clean_name = card_name.split("-")[0].strip()
-    response = requests.get(f"https://api.lorcana-api.com/cards/fetch?search=name~{clean_name}", timeout=8)
+    response = requests.get(
+        f"https://api.lorcana-api.com/cards/fetch?search=name~{clean_name}", timeout=8
+    )
     response.raise_for_status()
     results = response.json()
-    if not results or not isinstance(results, list): return {}
+    if not results or not isinstance(results, list):
+      return {}
 
-    best_match = results[0]
+    best_match = None
+    target_number = _extract_collector_number(card_number)
+    if target_number is not None:
+      for r in results:
+        if _extract_collector_number(str(r.get("Card_Num", ""))) == target_number:
+          best_match = r
+          break
+      if best_match is None:
+        return {}
+    else:
+      best_match = results[0]
+
     details = {}
     full_name = str(best_match.get("Name", ""))
-    if best_match.get("Subtitle"): full_name += f" - {best_match['Subtitle']}"
-    if full_name: details["card_name"] = full_name
+    if best_match.get("Subtitle"):
+      full_name += f" - {best_match['Subtitle']}"
+    if full_name:
+      details["card_name"] = full_name
 
-    if best_match.get("Set_Name"): details["set_name"] = str(best_match["Set_Name"])
-    if best_match.get("Rarity"): details["rarity"] = str(best_match["Rarity"])
-    if best_match.get("Cost"): details["play_cost"] = str(best_match["Cost"])
-    if best_match.get("Card_Num"): details["card_number"] = str(best_match["Card_Num"])
-    if best_match.get("Color"): details["color"] = str(best_match["Color"])
+    if best_match.get("Set_Name"):
+      details["set_name"] = str(best_match["Set_Name"])
+    if best_match.get("Rarity"):
+      details["rarity"] = str(best_match["Rarity"])
+    if best_match.get("Cost"):
+      details["play_cost"] = str(best_match["Cost"])
+    if best_match.get("Card_Num"):
+      details["card_number"] = str(best_match["Card_Num"])
+    if best_match.get("Color"):
+      details["color"] = str(best_match["Color"])
     return details
-  except Exception: return {}
+  except Exception:
+    return {}
 
 
 def enrich_card_data(card: dict) -> dict:
   game_lower = card.get("game_name", "").lower()
 
   if "riftbound" in game_lower:
-    riftcodex_data = fetch_riftbound_card_from_riftcodex(card.get("card_name", ""), card.get("card_number", ""))
+    riftcodex_data = fetch_riftbound_card_from_riftcodex(
+        card.get("card_name", ""), card.get("card_number", ""), card.get("set_code", "")
+    )
+    # La rareté Riftbound provient exclusivement de l'API Riftcodex.
     card["rarity"] = riftcodex_data.get("rarity", "")
     card.update({k: v for k, v in riftcodex_data.items() if v and k != "rarity"})
     card["cardmarket_slug"] = "Riftbound"
@@ -398,7 +565,7 @@ def enrich_card_data(card: dict) -> dict:
     card["cardmarket_search_term"] = f"{card.get('card_name', '')} {card.get('card_number', '')}".strip()
 
   elif "lorcana" in game_lower:
-    lorcana_data = fetch_lorcana_card_from_api(card.get("card_name", ""))
+    lorcana_data = fetch_lorcana_card_from_api(card.get("card_name", ""), card.get("card_number", ""))
     card.update({k: v for k, v in lorcana_data.items() if v})
     card["cardmarket_slug"] = "Lorcana"
     card["cardmarket_search_term"] = card.get("card_name", "").replace(" - ", " ")
@@ -425,13 +592,14 @@ def analyze_card_gemini_cached(image_bytes):
     1. "game_name" : Nom officiel du jeu.
     2. "card_name" : Nom COMPLET de la carte (titre principal + sous-titre).
     3. "set_name" : Nom ou code d'extension officiel imprimé.
-    4. "card_number" : Numéro complet tel qu'imprimé (ex: OP01-120, 156/166). Fais très attention à ne pas confondre O et 0.
-    5. "rarity" : Rareté officielle exacte (Pour Riftbound, regarde minutieusement le logo géométrique tout en bas au milieu).
-    6. "play_cost" : Le coût en mana/ressource/énergie.
-    7. "color": La couleur ou le type dominant de la carte.
-    8. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
-    9. "cardmarket_slug" : Nom de la catégorie sur Cardmarket.
-    10. "cardmarket_search_term" : Termes exacts pour Cardmarket.
+    4. "set_code" : Code de set ABRÉGÉ imprimé en bas de la carte (ex: "VEN", "OGN", "OGS" pour Riftbound). Laisse vide si absent ou illisible.
+    5. "card_number" : Numéro complet tel qu'imprimé (ex: OP01-120, 156/166). Fais très attention à ne pas confondre O et 0.
+    6. "rarity" : Rareté officielle exacte (Pour Riftbound, regarde minutieusement le logo géométrique tout en bas au milieu).
+    7. "play_cost" : Le coût en mana/ressource/énergie.
+    8. "color": La couleur ou le type dominant de la carte.
+    9. "language" : Code langue du texte de la carte ("JP", "EN", "FR", "DE").
+    10. "cardmarket_slug" : Nom de la catégorie sur Cardmarket.
+    11. "cardmarket_search_term" : Termes exacts pour Cardmarket.
 
     Génère STRICTEMENT un TABLEAU (array) JSON valide contenant un objet par carte trouvée, sans aucun formatage markdown additionnel. 
     Même s'il n'y a qu'une seule carte sur la photo, renvoie un tableau contenant un seul objet.
@@ -508,6 +676,7 @@ with tab1:
                               "Couleur": enriched.get("color", ""),
                               "Emplacement": "Classeur 1",
                               "Quantité": 1,
+                              "Image URL": enriched.get("image_url", ""),
                               "Cardmarket Slug": enriched.get("cardmarket_slug", ""),
                               "Terme Recherche": enriched.get("cardmarket_search_term", "")
                           })
@@ -525,6 +694,7 @@ with tab1:
           num_rows="dynamic",
           use_container_width=True,
           column_config={
+              "Image URL": st.column_config.ImageColumn("Aperçu", width="small"),
               "Quantité": st.column_config.NumberColumn("Quantité", min_value=1, step=1),
               "Cardmarket Slug": None,
               "Terme Recherche": None
@@ -535,28 +705,63 @@ with tab1:
       
       if st.button("💾 Ajouter tout le lot au stock", use_container_width=True):
           date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-          rows_to_add = []
-          
+
+          # (1) Fusion des doublons À L'INTÉRIEUR du lot scanné (même carte
+          #     détectée deux fois sur les photos) avant toute écriture.
+          merged = {}
+          order = []
           for _, row in edited_df.iterrows():
-              cardmarket_url = build_cardmarket_url(row["Cardmarket Slug"], row["Terme Recherche"])
-              rows_to_add.append([
-                  date_str,
-                  row["Jeu"],
-                  row["Nom"],
-                  row["Extension"],
-                  row["Numéro"],
-                  row["Rareté"],
-                  row["Coût"],
-                  row["Langue"],
-                  batch_loc,
-                  int(row["Quantité"]),
-                  row["Couleur"],
-                  cardmarket_url
-              ])
-              
-          sheet.append_rows(rows_to_add)
+              key = _match_key(row.get("Jeu"), row.get("Nom"), row.get("Numéro"))
+              qty = int(row.get("Quantité") or 1)
+              if key in merged:
+                  merged[key]["Quantité"] += qty
+              else:
+                  data = row.to_dict()
+                  data["Quantité"] = qty
+                  merged[key] = data
+                  order.append(key)
+
+          # (1) Comparaison avec le stock déjà en base : incrémente la
+          #     quantité d'une carte existante au lieu d'en recréer une ligne.
+          existing_index = build_existing_stock_index()
+
+          rows_to_add = []
+          updated_count = 0
+
+          for key in order:
+              data = merged[key]
+              if key in existing_index:
+                  existing_idx, existing_qty = existing_index[key]
+                  update_qty_cell(existing_idx, existing_qty + data["Quantité"])
+                  updated_count += 1
+              else:
+                  cardmarket_url = build_cardmarket_url(
+                      data.get("Cardmarket Slug", ""), data.get("Terme Recherche", "")
+                  )
+                  rows_to_add.append([
+                      date_str,
+                      data.get("Jeu", ""),
+                      data.get("Nom", ""),
+                      data.get("Extension", ""),
+                      data.get("Numéro", ""),
+                      data.get("Rareté", ""),
+                      data.get("Coût", ""),
+                      data.get("Langue", ""),
+                      batch_loc,
+                      int(data["Quantité"]),
+                      data.get("Couleur", ""),
+                      data.get("Image URL", ""),
+                      cardmarket_url,
+                  ])
+
+          if rows_to_add:
+              sheet.append_rows(rows_to_add)
           load_stock_records.clear()
-          st.success("✅ Stock mis à jour avec succès !")
+
+          st.success(
+              f"✅ Stock mis à jour : {len(rows_to_add)} nouvelle(s) carte(s), "
+              f"{updated_count} quantité(s) incrémentée(s) !"
+          )
           del st.session_state["pending_cards"]
           st.rerun()
 
@@ -632,6 +837,15 @@ with tab2:
 
       st.markdown(f"**Cartes trouvées : {len(filtered_df)}**")
 
+      # (4) Calculs faits UNE SEULE FOIS pour tout le tableau filtré, au lieu
+      #     d'être refaits pour chaque carte affichée dans la grille/le tableau.
+      filtered_rarity_series = get_rarity_series(filtered_df)
+      filtered_cost_lang = (
+          filtered_df.apply(resolve_cost_and_language, axis=1)
+          if not filtered_df.empty
+          else pd.DataFrame(columns=["Coût_final", "Langue_final"])
+      )
+
       # ========================================================
       # AFFICHAGE 1 : GRILLE DE CARTES 
       # ========================================================
@@ -644,20 +858,12 @@ with tab2:
               idx = filtered_df.index[i + j]
               row = filtered_df.iloc[i + j]
 
-              raw_cost = row.get("Coût")
-              raw_lang = row.get("Langue")
-              raw_etat = row.get("État")
-              row_rarity_series = get_rarity_series(pd.DataFrame([row]))
-              raw_rarity = row_rarity_series.iloc[0] if not row_rarity_series.empty else "N/A"
+              cost_val = filtered_cost_lang.loc[idx, "Coût_final"]
+              lang_val = filtered_cost_lang.loc[idx, "Langue_final"]
+              raw_rarity = filtered_rarity_series.loc[idx] if idx in filtered_rarity_series.index else "N/A"
               raw_color = row.get("Couleur") or "N/A"
+              image_url = row.get("Image URL") or ""
               qty = int(row["Quantité"])
-
-              if (raw_cost is None or pd.isna(raw_cost) or str(raw_cost).strip() in ["", "N/A"]) and str(raw_lang).isdigit():
-                cost_val = str(raw_lang)
-                lang_val = str(raw_etat) if raw_etat and not pd.isna(raw_etat) else "JP"
-              else:
-                cost_val = str(raw_cost) if pd.notna(raw_cost) and str(raw_cost) != "" else "N/A"
-                lang_val = str(raw_lang) if pd.notna(raw_lang) and str(raw_lang) != "" else "FR"
 
               link_url = row.get("Lien Cardmarket") or row.get("Prix Est. (€)") or "#"
               
@@ -685,6 +891,12 @@ with tab2:
 
               with cols[j]:
                 with st.container(border=True):
+                  # (7) Aperçu visuel de la carte quand l'API l'a fourni —
+                  #     permet de vérifier d'un coup d'œil que le bon match
+                  #     a été trouvé.
+                  if image_url:
+                    st.image(image_url, use_container_width=True)
+
                   st.markdown(card_html, unsafe_allow_html=True)
 
                   btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
@@ -708,11 +920,18 @@ with tab2:
       # AFFICHAGE 2 : TABLEAU
       # ========================================================
       else:
+        # (2) Construction d'un affichage canonique à partir des colonnes
+        #     normalisées calculées plus haut, au lieu du renommage
+        #     conditionnel bugué de la version précédente.
         display_df = filtered_df.copy()
-        if "Prix Est. (€)" in display_df.columns and "Lien Cardmarket" not in display_df.columns:
-          display_df = display_df.rename(columns={"Prix Est. (€)": "Lien Cardmarket"})
-        if "État" in display_df.columns and "Langue" not in display_df.columns:
-          display_df = display_df.rename(columns={"Langue": "Coût", "État": "Langue"})
+        if not filtered_rarity_series.empty:
+          display_df["Rareté"] = filtered_rarity_series.values
+        if not filtered_cost_lang.empty:
+          display_df["Coût"] = filtered_cost_lang["Coût_final"].values
+          display_df["Langue"] = filtered_cost_lang["Langue_final"].values
+        link_series = get_field_series(filtered_df, ["Lien Cardmarket", "Prix Est. (€)"])
+        if not link_series.empty:
+          display_df["Lien Cardmarket"] = link_series.values
 
         st.data_editor(
             display_df,
@@ -720,6 +939,7 @@ with tab2:
             num_rows="dynamic",
             column_config={
                 "Lien Cardmarket": st.column_config.LinkColumn("Cardmarket", display_text="↗ Voir"),
+                "Image URL": st.column_config.ImageColumn("Aperçu", width="small"),
                 "Quantité": st.column_config.NumberColumn("Quantité", min_value=1, step=1),
             },
         )
